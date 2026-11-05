@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Air-Calligraphy & 3D CAD · Pi-Pointer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#080c14;--surface:#0d1424;--border:rgba(255,255,255,.07);--text:#e8edf5;--muted:#6b7a99;
+  --accent:#f59e0b;--blue:#3b82f6;--green:#22c55e;--red:#ef4444;
+  --marker-size:clamp(130px,13vw,210px);--marker-margin-x:clamp(16px,3.125vw,60px);--marker-margin-y:clamp(16px,5.556vh,60px);--marker-pad:10px;
+}
+body.calibrated-mode{--marker-size:15.625vw;--marker-margin-x:3.125vw;--marker-margin-y:5.556vh}
+html,body{height:100%;overflow:hidden}
+body{font-family:'Outfit',sans-serif;background:var(--bg);color:var(--text);
+  background-image:linear-gradient(rgba(59,130,246,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(59,130,246,.04) 1px,transparent 1px);background-size:48px 48px}
+canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none}
+#ink{z-index:1;cursor:crosshair}
+#gl{z-index:1;display:none}
+body[data-mode="3d"] #ink{display:none}
+body[data-mode="3d"] #gl{display:block}
+
+/* top bar */
+#top{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:50;display:flex;align-items:center;gap:14px;
+  background:rgba(13,20,36,.88);backdrop-filter:blur(16px);border:1px solid var(--border);border-radius:100px;padding:6px 8px 6px 18px;box-shadow:0 10px 30px rgba(0,0,0,.6)}
+#top a{color:var(--muted);text-decoration:none;font-size:.8rem;font-weight:500}
+#top a:hover{color:var(--text)}
+#top h1{font-size:.95rem;font-weight:600;white-space:nowrap}
+.tabs{display:flex;gap:4px;background:rgba(255,255,255,.04);border-radius:100px;padding:3px}
+.tab{font:inherit;font-size:.8rem;font-weight:600;color:var(--muted);background:none;border:0;border-radius:100px;padding:7px 16px;cursor:pointer;position:relative;overflow:hidden}
+.tab.on{background:var(--accent);color:#1a1100}
+#status{display:flex;align-items:center;gap:7px;font-size:.78rem;color:var(--muted);padding:0 10px 0 4px;white-space:nowrap}
+#dot{width:8px;height:8px;border-radius:50%;background:var(--red)}
+#status.live{color:var(--text)}#status.live #dot{background:var(--green);animation:blink 1.5s infinite}
+@keyframes blink{50%{opacity:.4}}
+
+/* toolbar */
+#tools{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:50;display:flex;align-items:center;gap:8px;
+  background:rgba(13,20,36,.9);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.12);border-radius:20px;padding:10px 14px;box-shadow:0 10px 30px rgba(0,0,0,.6);max-width:calc(100vw - 2*var(--marker-margin-x) - 2*var(--marker-size) - 60px);flex-wrap:wrap;justify-content:center}
+.grp{display:none;align-items:center;gap:8px}
+body[data-mode="2d"] .grp.g2,body[data-mode="3d"] .grp.g3{display:flex}
+.btn{--p:0;position:relative;overflow:hidden;font:inherit;font-size:.8rem;font-weight:600;color:var(--text);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:10px 16px;cursor:pointer;min-width:64px;transition:background .2s,border-color .2s}
+.btn::after,.tab::after{content:'';position:absolute;left:0;bottom:0;height:3px;width:calc(var(--p)*100%);background:var(--accent)}
+.btn:hover{background:rgba(255,255,255,.12)}
+.btn.on{background:rgba(245,158,11,.22);border-color:var(--accent);color:#fcd34d}
+.sw{width:34px;height:34px;min-width:0;padding:0;border-radius:50%;border:2px solid rgba(255,255,255,.2)}
+.sw.on{border-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.2)}
+.sep{width:1px;height:28px;background:var(--border)}
+
+/* readout */
+#hud{position:fixed;top:78px;left:50%;transform:translateX(-50%);z-index:50;font-size:.78rem;color:var(--muted);display:flex;align-items:center;gap:12px;white-space:nowrap}
+#hud b{color:var(--text);font-weight:600}
+#nib{display:inline-block;height:14px;border-radius:50%;background:var(--text);vertical-align:middle}
+#hint{position:fixed;top:108px;left:50%;transform:translateX(-50%);z-index:50;font-size:.75rem;color:var(--muted);text-align:center;transition:opacity .6s}
+
+/* cursor */
+#cur{position:fixed;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;border:2px solid #fff;z-index:2000;pointer-events:none;display:none;mix-blend-mode:difference}
+#cur.pen{background:rgba(255,255,255,.9)}
+
+/* ArUco markers */
+#markers{position:fixed;inset:0;z-index:900;pointer-events:none;transition:opacity .25s}
+#markers.hidden{opacity:0}
+.aruco{position:fixed;background:#fff;padding:var(--marker-pad);border-radius:4px;box-shadow:0 10px 35px rgba(0,0,0,.75)}
+.aruco img{display:block;width:var(--marker-size);height:var(--marker-size);image-rendering:pixelated}
+.tl{top:var(--marker-margin-y);left:var(--marker-margin-x)}.tr{top:var(--marker-margin-y);right:var(--marker-margin-x)}
+.br{bottom:var(--marker-margin-y);right:var(--marker-margin-x)}.bl{bottom:var(--marker-margin-y);left:var(--marker-margin-x)}
+@media (max-width:900px){#top h1{display:none}}
+@media (prefers-reduced-motion:reduce){#dot{animation:none!important}}
+</style>
+</head>
+<body data-mode="2d">
+
+<canvas id="ink"></canvas>
+<canvas id="gl"></canvas>
+
+<div id="top">
+  <a href="index.html">← Hub</a>
+  <h1>Air-Calligraphy & 3D CAD</h1>
+  <div class="tabs">
+    <button class="tab on" id="t2" data-dwell>2D Calligraphy</button>
+    <button class="tab" id="t3" data-dwell>3D CAD</button>
+  </div>
+  <div id="status"><div id="dot"></div><span id="stx">Bridge offline · mouse mode</span></div>
+</div>
+
+<div id="hud">
+  <span>Roll <b id="h-roll">–</b>°</span>
+  <span class="g2h">Nib <b id="h-w">–</b> px <span id="nib" style="width:14px"></span></span>
+  <span class="g3h">Scale <b id="h-s">1.00</b></span>
+</div>
+<div id="hint"></div>
+
+<div id="tools">
+  <div class="grp g2">
+    <button class="btn" id="b-pen" data-dwell title="Space">Pen: OFF</button>
+    <div class="sep"></div>
+    <button class="btn sw on" data-dwell data-c="#e8edf5" style="background:#e8edf5" aria-label="White ink"></button>
+    <button class="btn sw" data-dwell data-c="#f59e0b" style="background:#f59e0b" aria-label="Amber ink"></button>
+    <button class="btn sw" data-dwell data-c="#3b82f6" style="background:#3b82f6" aria-label="Blue ink"></button>
+    <button class="btn sw" data-dwell data-c="#f43f5e" style="background:#f43f5e" aria-label="Rose ink"></button>
+    <button class="btn sw" data-dwell data-c="#22c55e" style="background:#22c55e" aria-label="Green ink"></button>
+    <div class="sep"></div>
+    <button class="btn" id="b-undo" data-dwell title="Ctrl+Z">Undo</button>
+    <button class="btn" id="b-clear" data-dwell>Clear</button>
+    <button class="btn" id="b-save" data-dwell>Save PNG</button>
+  </div>
+  <div class="grp g3">
+    <button class="btn on" id="b-grab" data-dwell title="Space">Grab: ON</button>
+    <button class="btn" id="b-shape" data-dwell>Shape: Knot</button>
+    <button class="btn" id="b-wire" data-dwell>Wireframe</button>
+    <button class="btn" id="b-reset" data-dwell>Reset</button>
+  </div>
+</div>
+
+<div id="cur"></div>
+
+<div id="markers">
+  <div class="aruco tl"><img src="assets/marker_0.png" alt="ArUco marker 0" /></div>
+  <div class="aruco tr"><img src="assets/marker_1.png" alt="ArUco marker 1" /></div>
+  <div class="aruco br"><img src="assets/marker_2.png" alt="ArUco marker 2" /></div>
+  <div class="aruco bl"><img src="assets/marker_3.png" alt="ArUco marker 3" /></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+
+/* ───────── shared input state ───────── */
+const P = { x: innerWidth/2, y: innerHeight/2, sx: innerWidth/2, sy: innerHeight/2, roll: 0, sroll: 0, live: false, imu: false, mouseDown: false };
+let mode = '2d', pen = false, grab = true, ink = '#e8edf5', manualW = 14, lastImuAt = 0;
+const R = new Array(9).fill(0);  // latest IMU rotation matrix (row-major)
+
+/* ───────── WebSocket bridge (same protocol as the hub) ───────── */
+let ws, delay = 2000, timer;
+function connect(){
+  clearTimeout(timer);
+  ws = new WebSocket('ws://localhost:8765');
+  ws.onopen = () => { delay = 2000; P.live = true; $('status').classList.add('live'); $('stx').textContent = 'Bridge connected'; $('cur').style.display = 'block'; hint(); };
+  let buttonHeld = false;
+  function syncButton(down) {
+    const pressed = !!down;
+    if (pressed !== buttonHeld) {
+      buttonHeld = pressed;
+      if (pressed) {
+        const target = document.elementFromPoint(P.x, P.y);
+        const clickable = target && target.closest('[data-dwell]');
+        if (clickable) clickable.click();
+      }
+    }
+    P.mouseDown = pressed;
+  }
+
+  ws.onmessage = e => {
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    if (d.type === 'cursor') { P.x = clamp(d.x,0,1) * innerWidth; P.y = clamp(d.y,0,1) * innerHeight; }
+    else if (d.type === 'imu' && d.r && d.r.length >= 9) {
+      for (let i = 0; i < 9; i++) R[i] = d.r[i];
+      P.roll = Math.asin(clamp(d.r[3], -1, 1)); P.imu = true; lastImuAt = performance.now();
+    }
+    else if (d.type === 'button') { syncButton(d.down); }
+  };
+  ws.onerror = () => {};
+  ws.onclose = () => {
+    P.live = false; P.imu = false; $('status').classList.remove('live'); $('stx').textContent = 'Bridge offline · mouse mode'; $('cur').style.display = 'none';
+    timer = setTimeout(connect, delay + Math.random()*1000); delay = Math.min(delay*1.5, 30000); hint();
+  };
+}
+connect();
+
+/* ───────── 2D calligraphy ───────── */
+const cv = $('ink'), ctx = cv.getContext('2d');
+let dpr = 1, history = [], drawing = false, lastPt = null;
+const NIB = -Math.PI/4;  // flat-nib angle
+
+function sizeInk(){
+  dpr = Math.min(devicePixelRatio || 1, 2);
+  const keep = document.createElement('canvas'); keep.width = cv.width; keep.height = cv.height; keep.getContext('2d').drawImage(cv,0,0);
+  cv.width = innerWidth*dpr; cv.height = innerHeight*dpr;
+  ctx.drawImage(keep,0,0);
+}
+sizeInk();
+
+function stamp(x, y, w){
+  ctx.fillStyle = ink;
+  ctx.beginPath(); ctx.ellipse(x*dpr, y*dpr, w/2*dpr, Math.max(1, w*0.13)*dpr, NIB, 0, Math.PI*2); ctx.fill();
+}
+function strokeTo(x, y, w){
+  if (!lastPt) { stamp(x, y, w); lastPt = {x, y, w}; return; }
+  const dx = x - lastPt.x, dy = y - lastPt.y, dist = Math.hypot(dx, dy), step = Math.max(1, w*0.1);
+  for (let d = step; d <= dist; d += step){
+    const t = d/dist; stamp(lastPt.x + dx*t, lastPt.y + dy*t, lastPt.w + (w - lastPt.w)*t);
+  }
+  lastPt = {x, y, w};
+}
+function snapshot(){ history.push(ctx.getImageData(0,0,cv.width,cv.height)); if (history.length > 15) history.shift(); }
+function undo(){ const s = history.pop(); if (s) ctx.putImageData(s,0,0); else toast('Nothing to undo'); }
+
+cv.addEventListener('pointerdown', e => { if (mode !== '2d') return; P.mouseDown = true; cv.setPointerCapture(e.pointerId); P.x = P.sx = e.clientX; P.y = P.sy = e.clientY; });
+addEventListener('pointerup', () => { P.mouseDown = false; });
+addEventListener('pointermove', e => { if (!P.live) { P.x = e.clientX; P.y = e.clientY; } });
+addEventListener('wheel', e => {
+  if (mode === '2d') manualW = clamp(manualW - e.deltaY*0.02, 3, 48);
+  else model.userScale = clamp(model.userScale * (e.deltaY < 0 ? 1.06 : 0.94), 0.3, 3);
+}, { passive: true });
+
+/* ───────── 3D CAD ───────── */
+let renderer, scene, cam, group, solid, edges, shapeIdx = 0, wire = false;
+const model = { userScale: 1, q: new THREE.Quaternion(), tq: new THREE.Quaternion(), pos: new THREE.Vector3() };
+const SHAPES = [
+  ['Knot', () => new THREE.TorusKnotGeometry(0.9, 0.3, 160, 20)],
+  ['Cube', () => new THREE.BoxGeometry(1.5, 1.5, 1.5)],
+  ['Ico',  () => new THREE.IcosahedronGeometry(1.1, 1)],
+  ['Torus',() => new THREE.TorusGeometry(0.95, 0.38, 20, 56)]
+];
+function initGL(){
+  renderer = new THREE.WebGLRenderer({ canvas: $('gl'), antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  scene = new THREE.Scene();
+  cam = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 50); cam.position.z = 6;
+  scene.add(new THREE.AmbientLight(0x8899bb, 0.7));
+  const dl = new THREE.DirectionalLight(0xffffff, 1.1); dl.position.set(3, 4, 5); scene.add(dl);
+  const grid = new THREE.GridHelper(14, 28, 0x3b82f6, 0x1e2a44); grid.position.y = -2.4; scene.add(grid);
+  group = new THREE.Group(); scene.add(group);
+  buildShape(); resizeGL();
+}
+function buildShape(){
+  if (solid) { group.remove(solid, edges); solid.geometry.dispose(); edges.geometry.dispose(); }
+  const g = SHAPES[shapeIdx][1]();
+  solid = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: .45, metalness: .25, flatShading: true, wireframe: wire }));
+  edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, 25), new THREE.LineBasicMaterial({ color: 0xfff3d1, transparent: true, opacity: .55 }));
+  edges.visible = !wire;
+  group.add(solid, edges);
+  $('b-shape').textContent = 'Shape: ' + SHAPES[shapeIdx][0];
+}
+function resizeGL(){ if (!renderer) return; renderer.setSize(innerWidth, innerHeight, false); cam.aspect = innerWidth/innerHeight; cam.updateProjectionMatrix(); }
+function resetModel(){ model.userScale = 1; model.q.identity(); model.tq.identity(); model.pos.set(0,0,0); group.position.set(0,0,0); }
+
+const m4 = new THREE.Matrix4(), dragQ = new THREE.Quaternion(), eul = new THREE.Euler();
+let lastDrag = null;
+$('gl').addEventListener('pointerdown', e => { P.mouseDown = true; lastDrag = [e.clientX, e.clientY]; $('gl').setPointerCapture(e.pointerId); });
+$('gl').addEventListener('pointermove', e => {
+  if (!P.mouseDown || P.live || !lastDrag) return;
+  eul.set((e.clientY - lastDrag[1])*0.008, (e.clientX - lastDrag[0])*0.008, 0);
+  dragQ.setFromEuler(eul); model.tq.premultiply(dragQ); lastDrag = [e.clientX, e.clientY];
+});
+
+function updateGL(){
+  if (P.imu && grab) {
+    m4.set(R[0],R[1],R[2],0, R[3],R[4],R[5],0, R[6],R[7],R[8],0, 0,0,0,1);
+    model.tq.setFromRotationMatrix(m4);
+    const halfH = 6 * Math.tan(THREE.MathUtils.degToRad(25));
+    model.pos.set((P.sx/innerWidth - .5)*2*halfH*cam.aspect, -(P.sy/innerHeight - .5)*2*halfH, 0);
+  }
+  model.q.slerp(model.tq, 0.25);
+  group.quaternion.copy(model.q);
+  group.position.lerp(model.pos, 0.25);
+  const s = group.scale.x + (model.userScale - group.scale.x)*0.2; group.scale.setScalar(s);
+  $('h-s').textContent = s.toFixed(2);
+  renderer.render(scene, cam);
+}
+
+/* ───────── UI actions ───────── */
+function setMode(m){
+  mode = m; document.body.dataset.mode = m;
+  $('t2').classList.toggle('on', m === '2d'); $('t3').classList.toggle('on', m === '3d');
+  if (m === '3d' && !renderer) {
+    if (typeof THREE === 'undefined') { toast('Three.js failed to load. Check your internet connection.'); setMode('2d'); return; }
+    initGL();
+  }
+  document.querySelectorAll('.g2h').forEach(e => e.style.display = m === '2d' ? '' : 'none');
+  document.querySelectorAll('.g3h').forEach(e => e.style.display = m === '3d' ? '' : 'none');
+  lastPt = null; hint();
+}
+function setPen(v){ pen = v; $('b-pen').textContent = 'Pen: ' + (v ? 'ON' : 'OFF'); $('b-pen').classList.toggle('on', v); if (!v) lastPt = null; }
+function setGrab(v){ grab = v; $('b-grab').textContent = 'Grab: ' + (v ? 'ON' : 'OFF'); $('b-grab').classList.toggle('on', v); }
+function toggleEngage(){ mode === '2d' ? setPen(!pen) : setGrab(!grab); }
+
+$('t2').onclick = () => setMode('2d');
+$('t3').onclick = () => setMode('3d');
+$('b-pen').onclick = () => setPen(!pen);
+$('b-grab').onclick = () => setGrab(!grab);
+$('b-undo').onclick = undo;
+$('b-clear').onclick = () => { snapshot(); ctx.clearRect(0,0,cv.width,cv.height); };
+$('b-save').onclick = () => {
+  const o = document.createElement('canvas'); o.width = cv.width; o.height = cv.height;
+  const c = o.getContext('2d'); c.fillStyle = '#080c14'; c.fillRect(0,0,o.width,o.height); c.drawImage(cv,0,0);
+  const a = document.createElement('a'); a.download = 'air-calligraphy.png'; a.href = o.toDataURL('image/png'); a.click();
+};
+$('b-shape').onclick = () => { shapeIdx = (shapeIdx + 1) % SHAPES.length; buildShape(); };
+$('b-wire').onclick = () => { wire = !wire; solid.material.wireframe = wire; edges.visible = !wire; $('b-wire').classList.toggle('on', wire); };
+$('b-reset').onclick = resetModel;
+document.querySelectorAll('.sw').forEach(b => b.onclick = () => {
+  ink = b.dataset.c; document.querySelectorAll('.sw').forEach(x => x.classList.toggle('on', x === b)); $('nib').style.background = ink;
+});
+
+addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); toggleEngage(); }
+  else if (e.key === 'z' && (e.ctrlKey || e.metaKey)) undo();
+  else if (e.key === '1') setMode('2d');
+  else if (e.key === '2') setMode('3d');
+  else if (e.key === 'm' || e.key === 'M') $('markers').classList.toggle('hidden');
+  else if (e.key === 'c' || e.key === 'C') document.body.classList.toggle('calibrated-mode');
+  else if (e.key === 'f' || e.key === 'F') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
+});
+addEventListener('resize', () => { sizeInk(); resizeGL(); });
+
+/* ───────── hints & toasts ───────── */
+let hintTimer;
+function hint(){
+  const h = $('hint'); h.style.opacity = 1;
+  const air = P.live;
+  h.textContent = mode === '2d'
+    ? (air ? 'Toggle Pen by hovering its button, then draw in the air. Roll your wrist to change nib width.' : 'Drag to draw · scroll for nib width · keys 1/2 switch mode · M hides markers')
+    : (air ? 'Tilt the controller to rotate the model. Point to move it. Toggle Grab to freeze it.' : 'Drag to rotate · scroll to scale · Space toggles Grab');
+  clearTimeout(hintTimer); hintTimer = setTimeout(() => h.style.opacity = 0, 7000);
+}
+function toast(t){ const h = $('hint'); h.textContent = t; h.style.opacity = 1; clearTimeout(hintTimer); hintTimer = setTimeout(() => h.style.opacity = 0, 3000); }
+
+/* ───────── dwell selection (hover 600 ms to click) ───────── */
+let dwellEl = null, dwellStart = 0, dwellCool = 0;
+function dwell(now){
+  if (!P.live) return;
+  const el = document.elementFromPoint(P.sx, P.sy)?.closest('[data-dwell]');
+  if (el && el !== dwellEl && now > dwellCool) { dwellEl = el; dwellStart = now; }
+  if (!el || el !== dwellEl) { if (dwellEl) dwellEl.style.setProperty('--p', 0); dwellEl = null; return; }
+  const p = clamp((now - dwellStart) / 600, 0, 1);
+  el.style.setProperty('--p', p);
+  if (p >= 1) { el.click(); el.style.setProperty('--p', 0); dwellEl = null; dwellCool = now + 900; }
+}
+
+/* ───────── main loop ───────── */
+let curW = 14;
+function frame(now){
+  P.sx += (P.x - P.sx) * 0.55; P.sy += (P.y - P.sy) * 0.55;
+  P.sroll += (P.roll - P.sroll) * 0.2;
+  const imuOn = P.imu && now - lastImuAt < 1000;
+  const targetW = imuOn ? 3 + clamp((P.sroll + 0.8)/1.6, 0, 1) * 45 : manualW;
+  curW += (targetW - curW) * 0.25;
+  $('h-roll').textContent = imuOn ? (P.sroll*180/Math.PI).toFixed(0) : '–';
+  $('h-w').textContent = curW.toFixed(0);
+  $('nib').style.width = Math.max(4, curW*0.45) + 'px';
+
+  const cur = $('cur');
+  if (P.live) { cur.style.transform = `translate(${P.sx}px,${P.sy}px)`; cur.classList.toggle('pen', mode === '2d' && pen); }
+
+  if (mode === '2d') {
+    const overUI = document.elementFromPoint(P.sx, P.sy)?.closest('#tools,#top');
+    const down = !overUI && (P.mouseDown || (P.live && pen));
+    if (down) {
+      if (!drawing) { snapshot(); drawing = true; }
+      strokeTo(P.sx, P.sy, curW);
+    } else if (drawing) { drawing = false; lastPt = null; }
+  } else if (renderer) updateGL();
+
+  dwell(now);
+  requestAnimationFrame(frame);
+}
+setMode('2d');
+$('nib').style.background = ink;
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

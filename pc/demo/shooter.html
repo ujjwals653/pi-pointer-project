@@ -1,0 +1,1173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Air-Aim Target Shooter — Pi-Pointer</title>
+  <meta name="description" content="Wii-style arcade target shooter driven by the Pi-Pointer IMU + camera fusion system. Tests sub-60ms latency."/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;900&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #06080f;
+      --surface: #0c1120;
+      --border: rgba(255,255,255,0.07);
+      --text: #e8edf5;
+      --muted: #6b7a99;
+      --accent: #f43f5e;
+      --accent2: #fb7185;
+      --green: #22c55e;
+      --blue: #3b82f6;
+      --radius: 16px;
+      --marker-size: clamp(80px, 13vw, 150px);
+      --marker-margin-x: clamp(16px, 3.125vw, 60px);
+      --marker-margin-y: clamp(16px, 5.556vh, 60px);
+      --marker-pad: 10px;
+    }
+
+    body.calibrated-mode {
+      --marker-size: 15.625vw;
+      --marker-margin-x: 3.125vw;
+      --marker-margin-y: 5.556vh;
+    }
+
+    html, body { height: 100%; overflow: hidden; }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      user-select: none;
+    }
+
+    /* ── Canvas (game field) ── */
+    #game-canvas {
+      position: fixed; inset: 0;
+      width: 100%; height: 100%;
+      cursor: none;
+    }
+
+    /* ── HUD overlay ── */
+    #hud {
+      position: fixed; top: 0; left: 0; right: 0;
+      padding: 16px calc(var(--marker-size) + var(--marker-margin-x) + 20px);
+      display: flex; align-items: center; gap: 16px;
+      background: linear-gradient(to bottom, rgba(6,8,15,0.9), transparent);
+      pointer-events: none; z-index: 10;
+      flex-wrap: wrap;
+    }
+
+    .hud-back {
+      pointer-events: all;
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.78rem; color: var(--muted);
+      text-decoration: none;
+      padding: 6px 12px; border-radius: 100px;
+      border: 1px solid var(--border);
+      background: rgba(12,17,32,0.7);
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .hud-back:hover { color: var(--text); border-color: rgba(255,255,255,0.2); }
+
+    .hud-title {
+      font-size: 0.85rem; font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 0.08em; text-transform: uppercase;
+    }
+
+    .hud-stats {
+      margin-left: auto;
+      display: flex; gap: 12px; flex-wrap: wrap;
+    }
+    .stat-pill {
+      display: flex; align-items: center; gap: 6px;
+      background: rgba(12,17,32,0.8);
+      border: 1px solid var(--border);
+      border-radius: 100px; padding: 5px 14px;
+      font-size: 0.82rem;
+    }
+    .stat-label { color: var(--muted); }
+    .stat-val { font-weight: 700; color: var(--text); min-width: 32px; text-align: right; }
+    #stat-acc { color: var(--green); }
+    #stat-lat { color: var(--blue); }
+
+    /* ── Connection badge ── */
+    #conn-badge {
+      position: fixed;
+      bottom: calc(var(--marker-margin-y) + var(--marker-size) + 16px);
+      left: var(--marker-margin-x);
+      z-index: 20;
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(12,17,32,0.85);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      border-radius: 100px; padding: 6px 14px;
+      font-size: 0.75rem; color: var(--muted);
+      transition: all 0.3s;
+    }
+    #conn-dot { width: 7px; height: 7px; border-radius: 50%; background: #ef4444; }
+    #conn-badge.connected #conn-dot { background: var(--green); animation: blink 1.5s infinite; }
+    #conn-badge.connected { color: var(--text); }
+    @keyframes blink { 0%,100%{opacity:1}50%{opacity:0.3} }
+
+    /* ── Screens (start, game, end) ── */
+    .screen {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 30;
+      background: rgba(6,8,15,0.92);
+      backdrop-filter: blur(8px);
+      transition: opacity 0.4s;
+    }
+    .screen.hidden { opacity: 0; pointer-events: none; }
+
+    .screen-card {
+      background: linear-gradient(145deg, #0c1120, #080c18);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 24px;
+      padding: 48px 56px;
+      max-width: 520px; width: 90%;
+      text-align: center;
+      box-shadow: 0 40px 80px rgba(0,0,0,0.6);
+      position: relative; overflow: hidden;
+    }
+    .screen-card::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    }
+
+    .screen-icon { font-size: 64px; margin-bottom: 20px; display: block; }
+    .screen h2 {
+      font-size: 2rem; font-weight: 800; margin-bottom: 12px;
+      background: linear-gradient(135deg, #fff 40%, var(--accent2));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .screen p { color: var(--muted); font-size: 0.95rem; line-height: 1.7; margin-bottom: 32px; }
+
+    .btn-primary {
+      display: inline-block;
+      background: linear-gradient(135deg, var(--accent), #e11d48);
+      color: white; font-family: 'Outfit', sans-serif;
+      font-size: 1rem; font-weight: 600;
+      padding: 14px 40px; border-radius: 100px;
+      border: none; cursor: pointer;
+      box-shadow: 0 8px 32px rgba(244,63,94,0.4);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 12px 40px rgba(244,63,94,0.55); }
+    .btn-primary:active { transform: scale(0.97); }
+
+    .btn-secondary {
+      display: inline-block;
+      background: rgba(255,255,255,0.06);
+      color: var(--text); font-family: 'Outfit', sans-serif;
+      font-size: 0.9rem; font-weight: 500;
+      padding: 12px 32px; border-radius: 100px;
+      border: 1px solid var(--border); cursor: pointer;
+      margin-left: 12px;
+      transition: background 0.2s;
+      text-decoration: none;
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.1); }
+
+    .end-stats {
+      display: grid; grid-template-columns: 1fr 1fr 1fr;
+      gap: 12px; margin-bottom: 32px;
+    }
+    .end-stat {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px 10px;
+    }
+    .end-stat .val {
+      font-size: 1.6rem; font-weight: 800;
+      background: linear-gradient(135deg, var(--text), var(--accent2));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .end-stat .lbl { font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
+
+    /* ── Timer ring ── */
+    #timer-ring-wrap {
+      position: fixed;
+      bottom: calc(var(--marker-margin-y) + var(--marker-size) + 16px);
+      right: var(--marker-margin-x);
+      z-index: 20;
+      display: none;
+    }
+    #timer-ring-wrap.active { display: block; }
+    #timer-ring-wrap svg { width: 56px; height: 56px; filter: drop-shadow(0 0 8px rgba(244,63,94,0.5)); }
+    #timer-text {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1rem; font-weight: 700; color: var(--text);
+    }
+
+    /* ── Dwell instructions ── */
+    #instructions {
+      position: fixed;
+      bottom: calc(var(--marker-margin-y) + var(--marker-size) + 80px);
+      right: var(--marker-margin-x);
+      font-size: 0.7rem; color: var(--muted); text-align: right;
+      z-index: 20; line-height: 1.7;
+    }
+
+    /* ── ArUco Vision Corner Markers (for RPi Camera Detection) ── */
+    .aruco-markers-wrap {
+      position: fixed; inset: 0;
+      pointer-events: none;
+      z-index: 900;
+    }
+
+    .aruco-card {
+      position: fixed;
+      background: #ffffff;
+      padding: var(--marker-pad);
+      border-radius: 4px;
+      box-shadow: 0 10px 35px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.25);
+      pointer-events: auto;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+
+    .aruco-tl { top: var(--marker-margin-y); left: var(--marker-margin-x); }
+    .aruco-tr { top: var(--marker-margin-y); right: var(--marker-margin-x); }
+    .aruco-br { bottom: var(--marker-margin-y); right: var(--marker-margin-x); }
+    .aruco-bl { bottom: var(--marker-margin-y); left: var(--marker-margin-x); }
+
+    .aruco-img {
+      width: var(--marker-size);
+      height: var(--marker-size);
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: crisp-edges;
+      background: #ffffff;
+    }
+
+    .aruco-tag {
+      position: absolute;
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: #94a3b8;
+      background: rgba(13, 20, 36, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      padding: 2px 7px;
+      border-radius: 100px;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .aruco-tl .aruco-tag { top: calc(100% + 5px); left: 0; }
+    .aruco-tr .aruco-tag { top: calc(100% + 5px); right: 0; }
+    .aruco-br .aruco-tag { bottom: calc(100% + 5px); right: 0; }
+    .aruco-bl .aruco-tag { bottom: calc(100% + 5px); left: 0; }
+
+    .aruco-hidden .aruco-card {
+      opacity: 0;
+      pointer-events: none;
+      transform: scale(0.92);
+    }
+
+    /* ── Marker Control Floating Toolbar ── */
+    #marker-toolbar {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      pointer-events: auto;
+    }
+
+    .marker-toolbar-pill {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(13, 20, 36, 0.88);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 100px;
+      padding: 6px 14px 6px 16px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      font-size: 0.78rem;
+    }
+
+    .marker-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #22c55e;
+      box-shadow: 0 0 10px rgba(34, 197, 94, 0.8);
+      animation: blink 2s infinite;
+    }
+
+    .marker-tb-title {
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0.02em;
+      margin-right: 4px;
+    }
+
+    .tb-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--muted);
+      font-family: inherit;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 5px 12px;
+      border-radius: 100px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .tb-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: var(--text);
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+    .tb-btn.active {
+      background: rgba(244, 63, 94, 0.25);
+      border-color: var(--accent);
+      color: #fda4af;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── ArUco Vision Corner Markers (for RPi Camera Detection) ── -->
+<div id="corner-markers" class="aruco-markers-wrap" aria-label="ArUco Vision Calibration Markers">
+  <div class="aruco-card aruco-tl" title="Marker 0: Top-Left">
+    <div class="aruco-tag">TL · #0</div>
+    <img src="assets/marker_0.png" alt="ArUco Marker 0" class="aruco-img" />
+  </div>
+  <div class="aruco-card aruco-tr" title="Marker 1: Top-Right">
+    <div class="aruco-tag">TR · #1</div>
+    <img src="assets/marker_1.png" alt="ArUco Marker 1" class="aruco-img" />
+  </div>
+  <div class="aruco-card aruco-br" title="Marker 2: Bottom-Right">
+    <div class="aruco-tag">BR · #2</div>
+    <img src="assets/marker_2.png" alt="ArUco Marker 2" class="aruco-img" />
+  </div>
+  <div class="aruco-card aruco-bl" title="Marker 3: Bottom-Left">
+    <div class="aruco-tag">BL · #3</div>
+    <img src="assets/marker_3.png" alt="ArUco Marker 3" class="aruco-img" />
+  </div>
+</div>
+
+<!-- ── Floating Marker Control Toolbar ── -->
+<div id="marker-toolbar">
+  <div class="marker-toolbar-pill">
+    <div class="marker-status-dot"></div>
+    <span class="marker-tb-title">ArUco Vision</span>
+    <button id="btn-toggle-markers" class="tb-btn active" title="Toggle corner markers (Shortcut: M)">Markers: ON</button>
+    <button id="btn-calib-markers" class="tb-btn" title="Toggle 1:1 calibrated 1920x1080 scale (Shortcut: C)">1:1 Scale</button>
+    <button id="btn-fullscreen" class="tb-btn" title="Toggle fullscreen for exact screen geometry (Shortcut: F)">⛶ Fullscreen</button>
+  </div>
+</div>
+
+<!-- ── Game canvas ── -->
+<canvas id="game-canvas"></canvas>
+
+<!-- ── HUD ── -->
+<div id="hud">
+  <a class="hud-back" href="index.html">← Hub</a>
+  <span class="hud-title">🎮 Air-Aim Shooter</span>
+  <div class="hud-stats">
+    <div class="stat-pill">
+      <span class="stat-label">Score</span>
+      <span class="stat-val" id="stat-score">0</span>
+    </div>
+    <div class="stat-pill">
+      <span class="stat-label">Hits</span>
+      <span class="stat-val" id="stat-hits">0</span> / <span class="stat-val" id="stat-total">0</span>
+    </div>
+    <div class="stat-pill">
+      <span class="stat-label">Acc</span>
+      <span class="stat-val" id="stat-acc">—</span>
+    </div>
+    <div class="stat-pill">
+      <span class="stat-label">Avg ms</span>
+      <span class="stat-val" id="stat-lat">—</span>
+    </div>
+    <div class="stat-pill" id="combo-pill" style="display:none">
+      <span class="stat-label">Combo</span>
+      <span class="stat-val" id="stat-combo">×1</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Connection badge ── -->
+<div id="conn-badge">
+  <div id="conn-dot"></div>
+  <span id="conn-text">Bridge offline — using mouse</span>
+</div>
+
+<!-- ── Timer ring (game countdown) ── -->
+<div id="timer-ring-wrap">
+  <svg viewBox="0 0 56 56">
+    <circle cx="28" cy="28" r="24" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="4"/>
+    <circle id="timer-arc" cx="28" cy="28" r="24" fill="none"
+            stroke="#f43f5e" stroke-width="4"
+            stroke-dasharray="150.796" stroke-dashoffset="0"
+            stroke-linecap="round"
+            transform="rotate(-90 28 28)"/>
+  </svg>
+  <div id="timer-text">60</div>
+</div>
+
+<div id="instructions">
+  Hover target 0.3s to shoot<br/>
+  Or press <kbd style="color:#e8edf5">Space</kbd> / click
+</div>
+
+<!-- ── Start screen ── -->
+<div class="screen" id="screen-start">
+  <div class="screen-card">
+    <span class="screen-icon">🎯</span>
+    <h2>Air-Aim Shooter</h2>
+    <p>
+      Point your Pi-Pointer at the targets.<br/>
+      <strong>Hover 300 ms</strong> to shoot, or press <strong>Space / click</strong>.<br/>
+      You have <strong>60 seconds</strong>. Hit as many as you can!
+    </p>
+    <button class="btn-primary" id="btn-start">Start Game</button>
+    <a class="btn-secondary" href="index.html">← Back</a>
+  </div>
+</div>
+
+<!-- ── End screen ── -->
+<div class="screen hidden" id="screen-end">
+  <div class="screen-card">
+    <span class="screen-icon">🏆</span>
+    <h2>Round Over!</h2>
+    <div class="end-stats">
+      <div class="end-stat"><div class="val" id="end-score">0</div><div class="lbl">Score</div></div>
+      <div class="end-stat"><div class="val" id="end-acc">0%</div><div class="lbl">Accuracy</div></div>
+      <div class="end-stat"><div class="val" id="end-lat">—</div><div class="lbl">Avg ms</div></div>
+    </div>
+    <button class="btn-primary" id="btn-restart">Play Again</button>
+    <a class="btn-secondary" href="index.html">← Hub</a>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+// CONFIG
+// ══════════════════════════════════════════════════════════════════════════════
+const GAME_DURATION   = 60;        // seconds
+const DWELL_TIME      = 300;       // ms to hover before auto-fire
+const MAX_TARGETS     = 5;         // max simultaneous targets
+const SPAWN_INTERVAL  = 1200;      // ms between spawns
+const TARGET_LIFETIME = 4000;      // ms until a target vanishes
+const MIN_R           = 36;        // minimum target radius
+const MAX_R           = 60;        // maximum target radius
+const HUD_MARGIN      = 150;       // px clearance from edges (avoids corner ArUco markers)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CANVAS SETUP
+// ══════════════════════════════════════════════════════════════════════════════
+const canvas = document.getElementById('game-canvas');
+const ctx    = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ══════════════════════════════════════════════════════════════════════════════
+// POINTER — driven by WebSocket (Pi) or mouse fallback
+// ══════════════════════════════════════════════════════════════════════════════
+const ptr = { x: W/2, y: H/2, fromPi: false };
+
+window.addEventListener('mousemove', e => {
+  if (!ptr.fromPi) { ptr.x = e.clientX; ptr.y = e.clientY; }
+});
+
+const connBadge = document.getElementById('conn-badge');
+const connText  = document.getElementById('conn-text');
+let reconnTimer = null, reconnDelay = 2000;
+let currentWs = null;
+
+function connectBridge() {
+  if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
+  if (currentWs) {
+    currentWs.onopen = currentWs.onclose = currentWs.onerror = currentWs.onmessage = null;
+    try { currentWs.close(); } catch {}
+  }
+  const ws = new WebSocket('ws://localhost:8765');
+  currentWs = ws;
+  ws.onopen = () => {
+    reconnDelay = 2000;
+    ptr.fromPi = true;
+    connBadge.classList.add('connected');
+    connText.textContent = 'Pi-Pointer connected';
+  };
+  let buttonHeld = false;
+  ws.onmessage = e => {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.type === 'cursor') {
+        ptr.x = d.x * W;
+        ptr.y = d.y * H;
+      } else if (d.type === 'button') {
+        const down = !!d.down;
+        if (down && !buttonHeld && state === 'playing') tryShoot(ptr.x, ptr.y);
+        buttonHeld = down;
+      }
+    } catch {}
+  };
+  ws.onerror = () => {};
+  ws.onclose = () => {
+    ptr.fromPi = false;
+    connBadge.classList.remove('connected');
+    connText.textContent = 'Bridge offline — using mouse';
+    if (!reconnTimer) {
+      const jitter = Math.random() * 1000;
+      reconnTimer = setTimeout(() => {
+        reconnTimer = null;
+        connectBridge();
+      }, reconnDelay + jitter);
+      reconnDelay = Math.min(reconnDelay * 1.5, 30000);
+    }
+  };
+}
+connectBridge();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AUDIO — simple Web Audio hit + miss sounds
+// ══════════════════════════════════════════════════════════════════════════════
+let audioCtx;
+function getAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+function playHit() {
+  try {
+    const ac = getAudio(), o = ac.createOscillator(), g = ac.createGain();
+    o.connect(g); g.connect(ac.destination);
+    o.frequency.value = 880; o.type = 'sine';
+    g.gain.setValueAtTime(0.3, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.18);
+    o.start(); o.stop(ac.currentTime + 0.18);
+  } catch {}
+}
+function playMiss() {
+  try {
+    const ac = getAudio(), o = ac.createOscillator(), g = ac.createGain();
+    o.connect(g); g.connect(ac.destination);
+    o.frequency.value = 220; o.type = 'sawtooth';
+    g.gain.setValueAtTime(0.15, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.12);
+    o.start(); o.stop(ac.currentTime + 0.12);
+  } catch {}
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PARTICLES
+// ══════════════════════════════════════════════════════════════════════════════
+const particles = [];
+
+function spawnParticles(x, y, color, count = 24) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 2 + Math.random() * 6;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      r: 3 + Math.random() * 5,
+      alpha: 1,
+      color,
+      life: 0.7 + Math.random() * 0.5
+    });
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt * 60;
+    p.y += p.vy * dt * 60;
+    p.vy += 0.08 * dt * 60;   // gravity
+    p.vx *= 0.97;
+    p.alpha -= dt / p.life;
+    if (p.alpha <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, p.alpha);
+    ctx.fillStyle = p.color;
+    ctx.shadowColor = p.color;
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FLOATING LABELS (score popups)
+// ══════════════════════════════════════════════════════════════════════════════
+const floats = [];
+
+function spawnFloat(x, y, text, color) {
+  floats.push({ x, y, text, color, alpha: 1, vy: -1.5 });
+}
+
+function updateFloats(dt) {
+  for (let i = floats.length - 1; i >= 0; i--) {
+    const f = floats[i];
+    f.y += f.vy * dt * 60;
+    f.alpha -= dt * 1.2;
+    if (f.alpha <= 0) floats.splice(i, 1);
+  }
+}
+
+function drawFloats() {
+  for (const f of floats) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, f.alpha);
+    ctx.fillStyle = f.color;
+    ctx.shadowColor = f.color;
+    ctx.shadowBlur = 12;
+    ctx.font = 'bold 28px Outfit, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(f.text, f.x, f.y);
+    ctx.restore();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RIPPLE EFFECTS (on miss-click)
+// ══════════════════════════════════════════════════════════════════════════════
+const ripples = [];
+
+function spawnRipple(x, y) {
+  ripples.push({ x, y, r: 0, alpha: 0.7 });
+}
+
+function updateRipples(dt) {
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const r = ripples[i];
+    r.r += 80 * dt;
+    r.alpha -= dt * 2;
+    if (r.alpha <= 0) ripples.splice(i, 1);
+  }
+}
+
+function drawRipples() {
+  for (const r of ripples) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, r.alpha);
+    ctx.strokeStyle = '#f43f5e';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = '#f43f5e';
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TARGETS
+// ══════════════════════════════════════════════════════════════════════════════
+const targets = [];
+let nextId = 0;
+
+const TARGET_COLORS = [
+  { fill: '#f43f5e', glow: '#f43f5e', particle: '#fb7185', ring: '#fda4af' },
+  { fill: '#3b82f6', glow: '#3b82f6', particle: '#93c5fd', ring: '#bfdbfe' },
+  { fill: '#f59e0b', glow: '#f59e0b', particle: '#fcd34d', ring: '#fde68a' },
+  { fill: '#a78bfa', glow: '#a78bfa', particle: '#c4b5fd', ring: '#ddd6fe' },
+  { fill: '#22c55e', glow: '#22c55e', particle: '#86efac', ring: '#bbf7d0' },
+];
+
+function spawnTarget() {
+  if (targets.length >= MAX_TARGETS) return;
+  const r = MIN_R + Math.random() * (MAX_R - MIN_R);
+  const x = HUD_MARGIN + r + Math.random() * (W - 2 * r - HUD_MARGIN * 2);
+  const y = HUD_MARGIN + r + Math.random() * (H - 2 * r - HUD_MARGIN * 2);
+  const color = TARGET_COLORS[Math.floor(Math.random() * TARGET_COLORS.length)];
+  // slight random drift
+  const vx = (Math.random() - 0.5) * 40;
+  const vy = (Math.random() - 0.5) * 40;
+  targets.push({ id: nextId++, x, y, r, vx, vy, color,
+    born: performance.now(), dying: false, dieAt: null,
+    scale: 0, // spawn scale-in
+    dwellProgress: 0, dwellHovering: false });
+}
+
+function updateTargets(dt, now) {
+  for (let i = targets.length - 1; i >= 0; i--) {
+    const t = targets[i];
+    // Scale in
+    if (t.scale < 1) {
+      t.scale = Math.min(1, t.scale + dt * 5);
+    }
+    // Move
+    t.x += t.vx * dt;
+    t.y += t.vy * dt;
+    // Bounce
+    if (t.x - t.r < 0)     { t.x = t.r;     t.vx *= -1; }
+    if (t.x + t.r > W)     { t.x = W - t.r; t.vx *= -1; }
+    if (t.y - t.r < HUD_MARGIN) { t.y = HUD_MARGIN + t.r; t.vy *= -1; }
+    if (t.y + t.r > H)     { t.y = H - t.r; t.vy *= -1; }
+    // Lifetime
+    if (!t.dying && (now - t.born) > TARGET_LIFETIME) {
+      expireTarget(i);
+    }
+    // Remove if dieAt passed (scale-out)
+    if (t.dying) {
+      t.scale -= dt * 6;
+      if (t.scale <= 0) { targets.splice(i, 1); }
+    }
+  }
+}
+
+function expireTarget(idx) {
+  const t = targets[idx];
+  if (t.dying) return;
+  t.dying = true;
+  missCount++;
+  combo = 0;
+  updateCombo();
+  playMiss();
+  spawnRipple(t.x, t.y);
+}
+
+function drawTargets(now) {
+  for (const t of targets) {
+    const s = t.scale;
+    ctx.save();
+    ctx.translate(t.x, t.y);
+    ctx.scale(s, s);
+
+    // Outer glow ring
+    const elapsed = now - t.born;
+    const lifeRatio = Math.min(elapsed / TARGET_LIFETIME, 1);
+
+    // Shrinking life ring
+    const ringR = t.r + 8;
+    ctx.beginPath();
+    ctx.arc(0, 0, ringR, -Math.PI / 2, -Math.PI / 2 + (1 - lifeRatio) * Math.PI * 2);
+    ctx.strokeStyle = t.color.ring;
+    ctx.lineWidth = 3;
+    ctx.globalAlpha = 0.5;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Glow
+    const grad = ctx.createRadialGradient(0, 0, t.r * 0.2, 0, 0, t.r);
+    grad.addColorStop(0, t.color.fill + 'ff');
+    grad.addColorStop(0.6, t.color.fill + 'cc');
+    grad.addColorStop(1, t.color.fill + '22');
+    ctx.shadowColor = t.color.glow;
+    ctx.shadowBlur  = 30;
+    ctx.beginPath();
+    ctx.arc(0, 0, t.r, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Inner bright circle
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(0, 0, t.r * 0.35, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fill();
+
+    // Crosshair rings
+    for (const frac of [0.55, 0.75]) {
+      ctx.beginPath();
+      ctx.arc(0, 0, t.r * frac, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    // Dwell progress arc
+    if (t.dwellProgress > 0) {
+      ctx.beginPath();
+      ctx.arc(0, 0, t.r + 12,
+        -Math.PI / 2,
+        -Math.PI / 2 + t.dwellProgress * Math.PI * 2);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth   = 4;
+      ctx.shadowColor = '#fff';
+      ctx.shadowBlur  = 16;
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CROSSHAIR cursor
+// ══════════════════════════════════════════════════════════════════════════════
+function drawCrosshair(x, y, locked) {
+  const size = 14, gap = 5;
+  ctx.save();
+  ctx.strokeStyle = locked ? '#ffffff' : '#f43f5e';
+  ctx.lineWidth   = 2;
+  ctx.shadowColor = locked ? '#ffffff' : '#f43f5e';
+  ctx.shadowBlur  = locked ? 20 : 10;
+  ctx.globalAlpha = locked ? 1 : 0.85;
+
+  // Arms
+  [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx, dy]) => {
+    ctx.beginPath();
+    ctx.moveTo(x + dx * gap, y + dy * gap);
+    ctx.lineTo(x + dx * (gap + size), y + dy * (gap + size));
+    ctx.stroke();
+  });
+
+  // Centre dot
+  ctx.beginPath();
+  ctx.arc(x, y, 3, 0, Math.PI * 2);
+  ctx.fillStyle = locked ? '#ffffff' : '#f43f5e';
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BACKGROUND — subtle star field
+// ══════════════════════════════════════════════════════════════════════════════
+const STARS = Array.from({ length: 80 }, () => ({
+  x: Math.random(),
+  y: Math.random(),
+  r: Math.random() * 1.5,
+  alpha: 0.1 + Math.random() * 0.3
+}));
+
+function drawBackground() {
+  ctx.clearRect(0, 0, W, H);
+
+  // Dark gradient
+  const bg = ctx.createRadialGradient(W/2, H/2, 0, W/2, H/2, Math.max(W,H)/1.4);
+  bg.addColorStop(0, '#0c1120');
+  bg.addColorStop(1, '#06080f');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Stars
+  for (const s of STARS) {
+    ctx.beginPath();
+    ctx.arc(s.x * W, s.y * H, s.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${s.alpha})`;
+    ctx.fill();
+  }
+
+  // Subtle grid
+  ctx.strokeStyle = 'rgba(59,130,246,0.04)';
+  ctx.lineWidth = 1;
+  const GRID = 64;
+  for (let x = 0; x <= W; x += GRID) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for (let y = 0; y <= H; y += GRID) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GAME STATE
+// ══════════════════════════════════════════════════════════════════════════════
+let state = 'start';   // 'start' | 'playing' | 'end'
+let score = 0, hitCount = 0, missCount = 0, combo = 0, maxCombo = 0;
+let reactionTimes = [];
+let gameStart, gameEnd;
+let spawnTimer = 0;
+let timeLeft = GAME_DURATION;
+
+function resetState() {
+  score = 0; hitCount = 0; missCount = 0; combo = 0; maxCombo = 0;
+  reactionTimes = [];
+  targets.length = 0;
+  particles.length = 0;
+  floats.length = 0;
+  ripples.length = 0;
+  spawnTimer = 0;
+  timeLeft = GAME_DURATION;
+}
+
+function updateCombo() {
+  const pill = document.getElementById('combo-pill');
+  if (combo > 1) {
+    pill.style.display = 'flex';
+    document.getElementById('stat-combo').textContent = `×${combo}`;
+  } else {
+    pill.style.display = 'none';
+  }
+}
+
+function updateHUD() {
+  document.getElementById('stat-score').textContent = score;
+  document.getElementById('stat-hits').textContent  = hitCount;
+  document.getElementById('stat-total').textContent = hitCount + missCount;
+  const total = hitCount + missCount;
+  document.getElementById('stat-acc').textContent =
+    total > 0 ? Math.round(hitCount / total * 100) + '%' : '—';
+  document.getElementById('stat-lat').textContent =
+    reactionTimes.length > 0
+      ? Math.round(reactionTimes.reduce((a,b)=>a+b,0)/reactionTimes.length)
+      : '—';
+}
+
+// Timer ring
+const timerArc  = document.getElementById('timer-arc');
+const timerText = document.getElementById('timer-text');
+const timerWrap = document.getElementById('timer-ring-wrap');
+const CIRC = 2 * Math.PI * 24; // circumference
+
+function updateTimerRing(t) {
+  const frac = Math.max(0, t / GAME_DURATION);
+  timerArc.style.strokeDashoffset = CIRC * (1 - frac);
+  timerText.textContent = Math.ceil(t);
+  timerArc.style.stroke = t < 10 ? '#f97316' : '#f43f5e';
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SHOOT
+// ══════════════════════════════════════════════════════════════════════════════
+function tryShoot(sx, sy) {
+  if (state !== 'playing') return;
+  const now = performance.now();
+  let hit = false;
+
+  for (let i = targets.length - 1; i >= 0; i--) {
+    const t = targets[i];
+    if (t.dying) continue;
+    const dx = sx - t.x, dy = sy - t.y;
+    if (dx*dx + dy*dy <= t.r*t.r) {
+      // Hit!
+      const reaction = now - t.born;
+      reactionTimes.push(reaction);
+      hitCount++;
+      combo++;
+      maxCombo = Math.max(maxCombo, combo);
+      const multiplier = Math.min(combo, 5);
+      const pts = Math.round((100 + Math.max(0, (TARGET_LIFETIME - reaction) / TARGET_LIFETIME * 200)) * multiplier);
+      score += pts;
+      spawnParticles(t.x, t.y, t.color.particle, 28);
+      spawnFloat(t.x, t.y - t.r - 20,
+        combo > 1 ? `+${pts} ×${combo}` : `+${pts}`,
+        combo > 3 ? '#fcd34d' : '#ffffff');
+      playHit();
+      targets.splice(i, 1);
+      updateCombo();
+      hit = true;
+      break;
+    }
+  }
+
+  if (!hit) {
+    missCount++;
+    combo = 0;
+    updateCombo();
+    playMiss();
+    spawnRipple(sx, sy);
+  }
+
+  updateHUD();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DWELL — hover 300ms over target to auto-shoot
+// ══════════════════════════════════════════════════════════════════════════════
+let dwellTarget = null;
+let dwellStart  = null;
+
+function updateDwell(dt, now) {
+  let hovering = null;
+  for (const t of targets) {
+    if (t.dying) continue;
+    const dx = ptr.x - t.x, dy = ptr.y - t.y;
+    if (dx*dx + dy*dy <= t.r*t.r) { hovering = t; break; }
+  }
+
+  if (hovering) {
+    if (dwellTarget?.id !== hovering.id) {
+      dwellTarget = hovering; dwellStart = now;
+      for (const t of targets) t.dwellProgress = 0;
+    }
+    hovering.dwellProgress = Math.min(1, (now - dwellStart) / DWELL_TIME);
+    if (now - dwellStart >= DWELL_TIME) {
+      tryShoot(hovering.x, hovering.y);
+      dwellTarget = null; dwellStart = null;
+    }
+  } else {
+    if (dwellTarget) {
+      dwellTarget.dwellProgress = 0;
+      dwellTarget = null; dwellStart = null;
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MAIN LOOP
+// ══════════════════════════════════════════════════════════════════════════════
+let last = performance.now();
+let locked = false; // is crosshair over a target
+
+function loop(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+
+  if (state === 'playing') {
+    timeLeft = Math.max(0, GAME_DURATION - (now - gameStart) / 1000);
+    updateTimerRing(timeLeft);
+
+    if (timeLeft <= 0) { endGame(); }
+    else {
+      // Spawn
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnTarget();
+        spawnTimer = SPAWN_INTERVAL / 1000;
+      }
+
+      updateDwell(dt, now);
+      updateTargets(dt, now);
+    }
+  }
+
+  updateParticles(dt);
+  updateFloats(dt);
+  updateRipples(dt);
+
+  // Draw
+  drawBackground();
+  drawParticles();
+  drawRipples();
+  if (state === 'playing' || state === 'end') drawTargets(now);
+  drawFloats();
+
+  // Crosshair
+  if (state === 'playing') {
+    locked = targets.some(t => {
+      const dx = ptr.x - t.x, dy = ptr.y - t.y;
+      return !t.dying && dx*dx + dy*dy <= t.r*t.r;
+    });
+    drawCrosshair(ptr.x, ptr.y, locked);
+  }
+
+  requestAnimationFrame(loop);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GAME FLOW
+// ══════════════════════════════════════════════════════════════════════════════
+function startGame() {
+  resetState();
+  state = 'playing';
+  gameStart = performance.now();
+  document.getElementById('screen-start').classList.add('hidden');
+  document.getElementById('screen-end').classList.add('hidden');
+  timerWrap.classList.add('active');
+  updateHUD();
+  updateTimerRing(GAME_DURATION);
+}
+
+function endGame() {
+  state = 'end';
+  timerWrap.classList.remove('active');
+  targets.forEach(t => t.dying = true);
+
+  const total = hitCount + missCount;
+  const acc   = total > 0 ? Math.round(hitCount / total * 100) : 0;
+  const avgMs = reactionTimes.length > 0
+    ? Math.round(reactionTimes.reduce((a,b)=>a+b,0)/reactionTimes.length)
+    : null;
+
+  document.getElementById('end-score').textContent = score;
+  document.getElementById('end-acc').textContent   = acc + '%';
+  document.getElementById('end-lat').textContent   = avgMs ? avgMs + ' ms' : '—';
+
+  setTimeout(() => {
+    document.getElementById('screen-end').classList.remove('hidden');
+  }, 800);
+}
+
+// ── Input ──────────────────────────────────────────────────────────────────
+canvas.addEventListener('click', e => {
+  if (state === 'playing') tryShoot(e.clientX, e.clientY);
+});
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (state === 'playing') tryShoot(ptr.x, ptr.y);
+  }
+});
+
+document.getElementById('btn-start').addEventListener('click', startGame);
+document.getElementById('btn-restart').addEventListener('click', startGame);
+
+// ── Boot ──────────────────────────────────────────────────────────────────
+requestAnimationFrame(loop);
+updateHUD();
+
+/* ── Corner Markers Interactive Toolbar & Shortcuts ── */
+const markersWrap = document.getElementById('corner-markers');
+const btnToggle = document.getElementById('btn-toggle-markers');
+const btnCalib  = document.getElementById('btn-calib-markers');
+const btnFull   = document.getElementById('btn-fullscreen');
+
+let markersVisible = true;
+let isCalibrated = false;
+
+function toggleMarkers(forceState) {
+  markersVisible = forceState !== undefined ? forceState : !markersVisible;
+  markersWrap.classList.toggle('aruco-hidden', !markersVisible);
+  btnToggle.classList.toggle('active', markersVisible);
+  btnToggle.textContent = markersVisible ? 'Markers: ON' : 'Markers: OFF';
+}
+
+function toggleCalib() {
+  isCalibrated = !isCalibrated;
+  document.body.classList.toggle('calibrated-mode', isCalibrated);
+  btnCalib.classList.toggle('active', isCalibrated);
+  btnCalib.textContent = isCalibrated ? '1:1 Calib ON' : '1:1 Scale';
+}
+
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+
+btnToggle.addEventListener('click', () => toggleMarkers());
+btnCalib.addEventListener('click', toggleCalib);
+btnFull.addEventListener('click', toggleFullscreen);
+
+document.addEventListener('fullscreenchange', () => {
+  btnFull.classList.toggle('active', !!document.fullscreenElement);
+});
+
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'm' || e.key === 'M') toggleMarkers();
+  if (e.key === 'c' || e.key === 'C') toggleCalib();
+  if (e.key === 'f' || e.key === 'F') toggleFullscreen();
+});
+</script>
+</body>
+</html>

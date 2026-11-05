@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Smart Lecture Remote · Pi-Pointer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;900&display=swap" rel="stylesheet" />
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#080c14;--surface:#0d1424;--border:rgba(255,255,255,.07);--text:#e8edf5;--muted:#6b7a99;
+  --accent:#a78bfa;--green:#22c55e;--red:#ef4444;
+  --marker-size:clamp(100px,13vw,150px);--marker-margin-x:clamp(16px,3.125vw,60px);--marker-margin-y:clamp(16px,5.556vh,60px);--marker-pad:10px;
+}
+body.calibrated-mode{--marker-size:15.625vw;--marker-margin-x:3.125vw;--marker-margin-y:5.556vh}
+html,body{height:100%;overflow:hidden}
+body{font-family:'Outfit',sans-serif;background:var(--bg);color:var(--text)}
+
+/* slide stage: content stays clear of the corner markers */
+#stage{position:fixed;inset:0;z-index:1;display:flex;flex-direction:column;justify-content:center;cursor:none;
+  padding:110px calc(var(--marker-margin-x) + var(--marker-size) + 40px) 130px;
+  background:radial-gradient(ellipse at 50% 0%,rgba(167,139,250,.16),transparent 60%),var(--bg)}
+#slide{animation:fade .35s ease}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+#slide h2{font-size:clamp(2.2rem,5vw,4.6rem);font-weight:700;line-height:1.1;margin-bottom:28px;letter-spacing:-.01em}
+#slide .sub{font-size:clamp(1.1rem,2vw,1.8rem);color:var(--muted);font-weight:300}
+#slide ul{list-style:none;display:grid;gap:18px;max-width:30em}
+#slide li{font-size:clamp(1.05rem,2vw,1.7rem);font-weight:400;line-height:1.4;padding-left:22px;border-left:3px solid var(--accent)}
+#slide img{display:block;max-width:100%;max-height:calc(100vh - 240px);margin:auto;object-fit:contain;border-radius:8px}
+#stage.full{padding:76px 24px 96px}
+#stage.full #slide img{max-height:calc(100vh - 172px);border-radius:4px}
+#slide.cover h2{font-size:clamp(3rem,8vw,7rem);font-weight:900}
+
+canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}
+#ink{z-index:2}#fx{z-index:3}#cur{z-index:100}
+
+#top{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:50;display:flex;align-items:center;gap:16px;
+  background:rgba(13,20,36,.88);backdrop-filter:blur(16px);border:1px solid var(--border);border-radius:100px;padding:8px 16px 8px 18px;box-shadow:0 10px 30px rgba(0,0,0,.6);white-space:nowrap}
+#top a{color:var(--muted);text-decoration:none;font-size:.8rem;font-weight:500}#top a:hover{color:var(--text)}
+#top h1{font-size:.95rem;font-weight:600}
+#count,#timer{font-size:.85rem;font-weight:600;font-variant-numeric:tabular-nums}
+#timer{color:var(--muted);font-weight:500}
+#status{display:flex;align-items:center;gap:7px;font-size:.78rem;color:var(--muted)}
+#dot{width:8px;height:8px;border-radius:50%;background:var(--red)}
+#status.live{color:var(--text)}#status.live #dot{background:var(--green);animation:blink 1.5s infinite}
+@keyframes blink{50%{opacity:.4}}
+
+#tools{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:50;display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;
+  background:rgba(13,20,36,.9);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.12);border-radius:20px;padding:10px 14px;box-shadow:0 10px 30px rgba(0,0,0,.6);
+  max-width:calc(100vw - 2*var(--marker-margin-x) - 2*var(--marker-size) - 40px)}
+.btn{--p:0;position:relative;overflow:hidden;font:inherit;font-size:.8rem;font-weight:600;color:var(--text);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:10px 14px;cursor:pointer;min-width:72px;transition:background .2s,border-color .2s}
+.btn::after{content:'';position:absolute;left:0;bottom:0;height:3px;width:calc(var(--p)*100%);background:var(--accent)}
+.btn:hover{background:rgba(255,255,255,.12)}
+.btn.on{background:rgba(167,139,250,.22);border-color:var(--accent);color:#ddd6fe}
+.sep{width:1px;height:28px;background:var(--border)}
+#inkbtn i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+
+#flash{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:60;font-size:2rem;font-weight:700;color:#ddd6fe;background:rgba(13,20,36,.8);border:1px solid var(--accent);border-radius:100px;padding:12px 32px;opacity:0;pointer-events:none;transition:opacity .5s}
+#flash.show{opacity:1;transition:none}
+#hint{position:fixed;top:68px;left:50%;transform:translateX(-50%);z-index:50;font-size:.75rem;color:var(--muted);text-align:center;transition:opacity .6s;white-space:nowrap}
+
+#markers{position:fixed;inset:0;z-index:900;pointer-events:none;transition:opacity .25s}
+#markers.hidden{opacity:0}
+.aruco{position:fixed;background:#fff;padding:var(--marker-pad);border-radius:4px;box-shadow:0 10px 35px rgba(0,0,0,.75)}
+.aruco img{display:block;width:var(--marker-size);height:var(--marker-size);image-rendering:pixelated}
+.tl{top:var(--marker-margin-y);left:var(--marker-margin-x)}.tr{top:var(--marker-margin-y);right:var(--marker-margin-x)}
+.br{bottom:var(--marker-margin-y);right:var(--marker-margin-x)}.bl{bottom:var(--marker-margin-y);left:var(--marker-margin-x)}
+@media (max-width:900px){#top h1,#timer{display:none}}
+@media (prefers-reduced-motion:reduce){#dot,#slide{animation:none!important}}
+</style>
+</head>
+<body>
+
+<div id="stage"><div id="slide"></div></div>
+<canvas id="ink"></canvas>
+<canvas id="fx"></canvas>
+<canvas id="cur"></canvas>
+
+<div id="top">
+  <a href="index.html">← Hub</a>
+  <h1>Smart Lecture Remote</h1>
+  <span id="count">1 / 1</span>
+  <span id="timer">00:00</span>
+  <div id="status"><div id="dot"></div><span id="stx">Bridge offline · mouse mode</span></div>
+</div>
+<div id="hint"></div>
+<div id="flash"></div>
+
+<div id="tools">
+  <button class="btn" id="b-prev" data-dwell title="←">◀ Prev</button>
+  <button class="btn" id="b-next" data-dwell title="→">Next ▶</button>
+  <div class="sep"></div>
+  <button class="btn on" id="b-laser" data-dwell title="L">Laser</button>
+  <button class="btn" id="b-spot" data-dwell title="S">Spotlight</button>
+  <button class="btn" id="b-pen" data-dwell title="P">Pen</button>
+  <div class="sep"></div>
+  <button class="btn" id="inkbtn" data-dwell title="I"><i></i>Ink</button>
+  <button class="btn" id="b-clear" data-dwell title="X">Clear</button>
+  <button class="btn on" id="b-swipe" data-dwell title="G">Swipe: ON</button>
+  <button class="btn" id="b-load" title="Use your own slides: a PDF or images">Load PDF / images</button>
+</div>
+<input type="file" id="file" accept="application/pdf,.pdf,image/*" multiple hidden />
+
+<div id="markers">
+  <div class="aruco tl"><img src="assets/marker_0.png" alt="ArUco marker 0" /></div>
+  <div class="aruco tr"><img src="assets/marker_1.png" alt="ArUco marker 1" /></div>
+  <div class="aruco br"><img src="assets/marker_2.png" alt="ArUco marker 2" /></div>
+  <div class="aruco bl"><img src="assets/marker_3.png" alt="ArUco marker 3" /></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+
+/* ───────── slides ───────── */
+let DECK = [
+  { cover: 1, h: 'Pi-Pointer', s: 'A DIY motion controller for presenters' },
+  { h: 'How it works', l: ['An MPU6050 sensor tracks your wrist orientation', 'A webcam finds four markers in the screen corners', 'Fusing both gives a steady pointer on the slide'] },
+  { h: 'Four ways to point', l: ['Laser: a glowing dot that follows your hand', 'Spotlight: dim everything except what you aim at', 'Pen: draw on the slide in mid-air', 'Swipe: flick left or right to change slides'] },
+  { h: 'Try it now', l: ['Hover a toolbar button for 0.6 s to select it', 'Roll your wrist to resize the spotlight and the pen', 'Flick your hand quickly across the screen to turn the slide'] },
+  { cover: 1, h: 'Questions?', s: 'Swipe back to revisit any slide' }
+];
+let cur = 0;
+function render(){
+  const d = DECK[cur], s = $('slide');
+  s.className = d.cover ? 'cover' : '';
+  $('stage').classList.toggle('full', !!(d.img || d.pdfPage));
+  s.innerHTML = d.img ? `<img src="${d.img}" alt="Slide ${cur + 1}">`
+    : d.pdfPage ? `<p class="sub">Rendering page ${d.pdfPage}…</p>`
+    : `<h2>${d.h}</h2>` + (d.s ? `<p class="sub">${d.s}</p>` : '') + (d.l ? `<ul>${d.l.map(x => `<li>${x}</li>`).join('')}</ul>` : '');
+  s.style.animation = 'none'; void s.offsetWidth; s.style.animation = '';
+  $('count').textContent = (cur + 1) + ' / ' + DECK.length;
+  if (pdfDoc) { ensurePage(cur); ensurePage(cur + 1); ensurePage(cur + 2); }
+}
+
+/* ───────── PDF import (PDF.js): each page becomes a slide, rendered on demand ───────── */
+let pdfDoc = null; const rendering = {};
+async function loadPdf(file){
+  if (typeof pdfjsLib === 'undefined') { flash('PDF library failed to load. Check your connection.'); return; }
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  flash('Loading PDF…');
+  try {
+    const doc = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    pdfDoc = doc; for (const k in rendering) delete rendering[k]; for (const k in inks) delete inks[k];
+    ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0, 0, ink.width, ink.height); ctx.restore();
+    DECK = Array.from({ length: doc.numPages }, (_, i) => ({ pdfPage: i + 1 }));
+    cur = 0; render(); flash(doc.numPages + (doc.numPages === 1 ? ' page' : ' pages') + ' loaded');
+  } catch (err) { console.error(err); flash('Could not open that PDF'); }
+}
+async function ensurePage(i){
+  const d = DECK[i], doc = pdfDoc;
+  if (!d || !d.pdfPage || d.img || rendering[i]) return;
+  rendering[i] = true;
+  try {
+    const page = await doc.getPage(d.pdfPage), base = page.getViewport({ scale: 1 });
+    const scale = clamp(Math.min((H - 172)/base.height, (W - 48)/base.width)*dpr, 1, 4);
+    const vp = page.getViewport({ scale }), c = document.createElement('canvas');
+    c.width = vp.width; c.height = vp.height;
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvasContext: g, viewport: vp }).promise;
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
+    if (doc !== pdfDoc) return;
+    d.img = URL.createObjectURL(blob);
+    if (cur === i) render();
+  } catch (err) { console.error(err); if (doc === pdfDoc) { delete rendering[i]; if (cur === i) flash('Page ' + d.pdfPage + ' failed to render'); } }
+}
+const inks = {};
+function go(i, label){
+  i = clamp(i, 0, DECK.length - 1);
+  if (i === cur) { flash(label === 'Next' ? 'Last slide' : 'First slide'); return; }
+  inks[cur] = ctx.getImageData(0, 0, ink.width, ink.height);
+  ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0, 0, ink.width, ink.height); ctx.restore();
+  if (inks[i]) ctx.putImageData(inks[i], 0, 0);
+  cur = i; render(); if (label) flash(label);
+}
+let flashT;
+function flash(t){ const f = $('flash'); f.textContent = t; f.classList.add('show'); clearTimeout(flashT); flashT = setTimeout(() => f.classList.remove('show'), 350); }
+
+$('b-load').onclick = () => $('file').click();
+$('file').onchange = e => {
+  const pdf = [...e.target.files].find(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
+  if (pdf) { e.target.value = ''; loadPdf(pdf); return; }
+  const fs = [...e.target.files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  if (!fs.length) return;
+  pdfDoc = null; DECK = fs.map(f => ({ img: URL.createObjectURL(f) })); for (const k in inks) delete inks[k];
+  ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0, 0, ink.width, ink.height); ctx.restore();
+  cur = 0; render(); flash(DECK.length + ' slides loaded');
+};
+
+/* ───────── input state ───────── */
+const P = { x: innerWidth/2, y: innerHeight/2, sx: innerWidth/2, sy: innerHeight/2, roll: 0, live: false, imu: false, down: false };
+let mode = 'laser', swipeOn = true, manualS = 1, lastImuAt = 0;
+const COLORS = ['#f43f5e', '#f59e0b', '#22d3ee', '#ffffff'];
+let inkIdx = 0;
+
+let ws, delay = 2000, timer;
+function connect(){
+  clearTimeout(timer);
+  ws = new WebSocket('ws://localhost:8765');
+  ws.onopen = () => { delay = 2000; P.live = true; $('status').classList.add('live'); $('stx').textContent = 'Bridge connected'; hint(); };
+  let buttonHeld = false;
+  function syncButton(down) {
+    const pressed = !!down;
+    if (pressed !== buttonHeld) {
+      buttonHeld = pressed;
+      if (pressed) {
+        const target = document.elementFromPoint(P.x, P.y);
+        const clickable = target && target.closest('[data-dwell]');
+        if (clickable) clickable.click();
+      }
+    }
+    P.down = pressed;
+  }
+
+  ws.onmessage = e => {
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    if (d.type === 'cursor') { P.x = clamp(d.x,0,1)*innerWidth; P.y = clamp(d.y,0,1)*innerHeight; }
+    else if (d.type === 'imu' && d.r && d.r.length >= 9) { P.roll = Math.asin(clamp(d.r[3], -1, 1)); P.imu = true; lastImuAt = performance.now(); }
+    else if (d.type === 'button') { syncButton(d.down); }
+  };
+  ws.onerror = () => {};
+  ws.onclose = () => {
+    P.live = false; P.imu = false; $('status').classList.remove('live'); $('stx').textContent = 'Bridge offline · mouse mode';
+    timer = setTimeout(connect, delay + Math.random()*1000); delay = Math.min(delay*1.5, 30000); hint();
+  };
+}
+connect();
+
+addEventListener('pointermove', e => { if (!P.live) { P.x = e.clientX; P.y = e.clientY; } });
+addEventListener('pointerdown', e => { if (!e.target.closest('.btn,#top')) P.down = true; });
+addEventListener('pointerup', () => { P.down = false; });
+addEventListener('wheel', e => { manualS = clamp(manualS - e.deltaY*0.001, 0.4, 2.5); }, { passive: true });
+
+/* ───────── canvases ───────── */
+const ink = $('ink'), ctx = ink.getContext('2d'), fxc = $('fx'), fx = fxc.getContext('2d'), curc = $('cur'), cu = curc.getContext('2d');
+let dpr = 1, W = 0, H = 0;
+function size(){
+  dpr = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight;
+  const keep = document.createElement('canvas'); keep.width = ink.width; keep.height = ink.height; keep.getContext('2d').drawImage(ink, 0, 0);
+  ink.width = fxc.width = curc.width = W*dpr; ink.height = fxc.height = curc.height = H*dpr;
+  ctx.setTransform(1,0,0,1,0,0); ctx.drawImage(keep, 0, 0, ink.width, ink.height);
+  ctx.setTransform(dpr,0,0,dpr,0,0); fx.setTransform(dpr,0,0,dpr,0,0); cu.setTransform(dpr,0,0,dpr,0,0);
+}
+size(); addEventListener('resize', size);
+
+/* ───────── controls ───────── */
+function setMode(m){
+  mode = m; lastPt = null;
+  ['laser', 'spot', 'pen'].forEach(k => $('b-' + k).classList.toggle('on', k === m));
+}
+function setInk(){ $('inkbtn').querySelector('i').style.background = COLORS[inkIdx]; }
+$('b-prev').onclick = () => go(cur - 1, 'Previous');
+$('b-next').onclick = () => go(cur + 1, 'Next');
+$('b-laser').onclick = () => setMode('laser');
+$('b-spot').onclick = () => setMode('spot');
+$('b-pen').onclick = () => setMode('pen');
+$('inkbtn').onclick = () => { inkIdx = (inkIdx + 1) % COLORS.length; setInk(); };
+$('b-clear').onclick = () => { ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0, 0, ink.width, ink.height); ctx.restore(); delete inks[cur]; };
+$('b-swipe').onclick = () => { swipeOn = !swipeOn; $('b-swipe').textContent = 'Swipe: ' + (swipeOn ? 'ON' : 'OFF'); $('b-swipe').classList.toggle('on', swipeOn); };
+setInk();
+
+addEventListener('keydown', e => {
+  const k = e.key;
+  if (k === 'ArrowRight' || k === 'PageDown' || k === ' ') { e.preventDefault(); go(cur + 1, 'Next'); }
+  else if (k === 'ArrowLeft' || k === 'PageUp') go(cur - 1, 'Previous');
+  else if (k === 'l' || k === 'L') setMode('laser');
+  else if (k === 's' || k === 'S') setMode('spot');
+  else if (k === 'p' || k === 'P') setMode('pen');
+  else if (k === 'i' || k === 'I') $('inkbtn').click();
+  else if (k === 'x' || k === 'X') $('b-clear').click();
+  else if (k === 'g' || k === 'G') $('b-swipe').click();
+  else if (k === 't' || k === 'T') t0 = performance.now();
+  else if (k === 'm' || k === 'M') $('markers').classList.toggle('hidden');
+  else if (k === 'c' || k === 'C') document.body.classList.toggle('calibrated-mode');
+  else if (k === 'f' || k === 'F') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
+});
+
+let hintTimer;
+function hint(){
+  const h = $('hint'); h.style.opacity = 1;
+  h.textContent = P.live ? 'Point to aim. Flick quickly left or right to change slides. Roll your wrist to resize.'
+                         : 'Mouse mode: ← → change slide · L laser · S spotlight · P pen (hold mouse) · scroll resizes';
+  clearTimeout(hintTimer); hintTimer = setTimeout(() => h.style.opacity = 0, 8000);
+}
+hint();
+
+/* dwell selection (hover 600 ms to click) */
+let dwellEl = null, dwellStart = 0, dwellCool = 0;
+function dwell(now, under){
+  if (!P.live) return;
+  const el = under?.closest('[data-dwell]');
+  if (el && el !== dwellEl && now > dwellCool) { dwellEl = el; dwellStart = now; }
+  if (!el || el !== dwellEl) { if (dwellEl) dwellEl.style.setProperty('--p', 0); dwellEl = null; return; }
+  const p = clamp((now - dwellStart)/600, 0, 1);
+  el.style.setProperty('--p', p);
+  if (p >= 1) { el.click(); el.style.setProperty('--p', 0); dwellEl = null; dwellCool = now + 900; }
+}
+
+/* ───────── swipe detection (fast horizontal flick) ───────── */
+const hist = []; let swipeCool = 0;
+function swipe(now){
+  hist.push({ t: now, x: P.x, y: P.y });
+  while (hist.length && now - hist[0].t > 350) hist.shift();
+  if (!swipeOn || !P.live || mode === 'pen' || now < swipeCool || hist.length < 4) return;
+  const a = hist[0], b = hist[hist.length - 1], dx = b.x - a.x, dy = b.y - a.y;
+  if (Math.abs(dx) > W*0.4 && Math.abs(dy) < H*0.18) {
+    swipeCool = now + 1000; hist.length = 0;
+    dx < 0 ? go(cur + 1, 'Next') : go(cur - 1, 'Previous');
+  }
+}
+
+/* ───────── drawing ───────── */
+let lastPt = null; const trail = [];
+function drawFx(now, sizeF){
+  fx.clearRect(0, 0, W, H); cu.clearRect(0, 0, W, H);
+  const x = P.sx, y = P.sy;
+  if (mode === 'laser') {
+    trail.push({ x, y, t: now }); while (trail.length && now - trail[0].t > 450) trail.shift();
+    cu.lineCap = 'round';
+    for (let i = 1; i < trail.length; i++) {
+      const k = 1 - (now - trail[i].t)/450;
+      cu.strokeStyle = `rgba(239,68,68,${k*0.35})`; cu.lineWidth = 1.5 + k*2.5;
+      cu.beginPath(); cu.moveTo(trail[i-1].x, trail[i-1].y); cu.lineTo(trail[i].x, trail[i].y); cu.stroke();
+    }
+    cu.fillStyle = '#ef4444';
+    cu.beginPath(); cu.arc(x, y, 6*sizeF, 0, 7); cu.fill();
+  } else {
+    trail.length = 0;
+    if (mode === 'spot') {
+      const R = 170*sizeF;
+      fx.fillStyle = 'rgba(4,6,12,.82)'; fx.fillRect(0, 0, W, H);
+      fx.globalCompositeOperation = 'destination-out';
+      const g = fx.createRadialGradient(x, y, R*0.8, x, y, R);
+      g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+      fx.fillStyle = g; fx.beginPath(); fx.arc(x, y, R, 0, 7); fx.fill();
+      fx.globalCompositeOperation = 'source-over';
+      cu.strokeStyle = 'rgba(167,139,250,.7)'; cu.lineWidth = 2; cu.beginPath(); cu.arc(x, y, R*0.8, 0, 7); cu.stroke();
+    } else {
+      cu.strokeStyle = COLORS[inkIdx]; cu.lineWidth = 2; cu.beginPath(); cu.arc(x, y, 3 + sizeF*3, 0, 7); cu.stroke();
+    }
+  }
+}
+
+/* ───────── main loop ───────── */
+let t0 = performance.now();
+function frame(now){
+  P.sx += (P.x - P.sx)*0.5; P.sy += (P.y - P.sy)*0.5;
+  const imuOn = P.imu && now - lastImuAt < 1000;
+  const sizeF = imuOn ? 0.5 + clamp((P.roll + 0.8)/1.6, 0, 1)*2 : manualS;
+  const under = document.elementFromPoint(P.sx, P.sy), overUI = under?.closest('#tools,#top');
+
+  if (mode === 'pen' && !overUI && (P.down || P.live)) {
+    ctx.strokeStyle = COLORS[inkIdx]; ctx.lineWidth = 2 + sizeF*3; ctx.lineCap = ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(lastPt ? lastPt.x : P.sx, lastPt ? lastPt.y : P.sy); ctx.lineTo(P.sx, P.sy); ctx.stroke();
+    lastPt = { x: P.sx, y: P.sy };
+  } else lastPt = null;
+
+  drawFx(now, sizeF);
+  swipe(now);
+  dwell(now, under);
+
+  const s = Math.floor((now - t0)/1000);
+  $('timer').textContent = String(Math.floor(s/60)).padStart(2, '0') + ':' + String(s%60).padStart(2, '0');
+  requestAnimationFrame(frame);
+}
+render();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pi-Pointer Demo Hub</title>
+  <meta name="description" content="Interactive demos for the Pi-Pointer — a DIY Wii-style motion controller using Raspberry Pi, MPU6050 IMU and a webcam." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;900&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #080c14;
+      --surface:   #0d1424;
+      --border:    rgba(255,255,255,0.07);
+      --text:      #e8edf5;
+      --muted:     #6b7a99;
+      --accent:    #3b82f6;
+      --accent2:   #818cf8;
+      --green:     #22c55e;
+      --red:       #ef4444;
+      --radius:    20px;
+      --glow:      0 0 40px rgba(59,130,246,0.25);
+    }
+
+    html, body { height: 100%; }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: '';
+      position: fixed; inset: 0; z-index: 0;
+      background-image:
+        linear-gradient(rgba(59,130,246,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(59,130,246,0.04) 1px, transparent 1px);
+      background-size: 48px 48px;
+      pointer-events: none;
+    }
+
+    body::after {
+      content: '';
+      position: fixed;
+      top: -200px; left: 50%;
+      transform: translateX(-50%);
+      width: 900px; height: 600px;
+      background: radial-gradient(ellipse, rgba(59,130,246,0.15) 0%, transparent 70%);
+      pointer-events: none; z-index: 0;
+    }
+
+    header {
+      position: relative; z-index: 1;
+      padding: 48px 40px 0;
+      max-width: 1280px; margin: 0 auto;
+    }
+
+    .header-inner {
+      display: flex; align-items: center; gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .logo-ring {
+      width: 56px; height: 56px;
+      border-radius: 50%;
+      border: 2px solid var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: var(--glow);
+      animation: pulse-ring 3s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    .logo-ring svg { width: 28px; height: 28px; }
+
+    @keyframes pulse-ring {
+      0%,100% { box-shadow: 0 0 20px rgba(59,130,246,0.3); }
+      50%      { box-shadow: 0 0 50px rgba(59,130,246,0.6); }
+    }
+
+    .header-text h1 {
+      font-size: clamp(1.6rem, 3vw, 2.4rem);
+      font-weight: 700;
+      background: linear-gradient(135deg, #e8edf5 30%, var(--accent2));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      line-height: 1.2;
+    }
+    .header-text p {
+      color: var(--muted); font-size: 0.95rem; margin-top: 4px;
+    }
+
+    #status-badge {
+      margin-left: auto;
+      display: flex; align-items: center; gap: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      padding: 8px 16px;
+      font-size: 0.82rem; font-weight: 500;
+      color: var(--muted);
+      transition: all 0.4s;
+      white-space: nowrap;
+    }
+    #status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--red);
+      transition: background 0.4s;
+    }
+    #status-badge.connected #status-dot { background: var(--green); animation: blink 1.5s ease infinite; }
+    #status-badge.connected { color: var(--text); border-color: rgba(34,197,94,0.3); }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    .grid-section {
+      position: relative; z-index: 1;
+      max-width: 1280px; margin: 0 auto;
+      padding: 48px 40px 80px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 24px;
+    }
+
+    .card {
+      position: relative;
+      background: linear-gradient(145deg, var(--surface), rgba(13,20,36,0.6));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px;
+      cursor: pointer;
+      transition: transform 0.25s cubic-bezier(.34,1.56,.64,1),
+                  border-color 0.3s, box-shadow 0.3s;
+      overflow: hidden;
+      text-decoration: none; color: inherit;
+      display: block;
+    }
+    .card::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: radial-gradient(circle at var(--mx,50%) var(--my,50%),
+                  rgba(255,255,255,0.04) 0%, transparent 60%);
+      opacity: 0; transition: opacity 0.3s;
+      pointer-events: none;
+    }
+    .card:hover, .card.pointer-hover { transform: translateY(-6px) scale(1.01); }
+    .card:hover::before, .card.pointer-hover::before { opacity: 1; }
+    .card:hover, .card.pointer-hover { border-color: var(--card-color, var(--accent)); box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px var(--card-color, var(--accent)) inset; }
+
+    .card-glow-bar {
+      position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, transparent, var(--card-color, var(--accent)), transparent);
+      opacity: 0; transition: opacity 0.3s;
+    }
+    .card:hover .card-glow-bar, .card.pointer-hover .card-glow-bar { opacity: 1; }
+
+    .card-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 0.7rem; font-weight: 600; letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 4px 10px; border-radius: 100px;
+      background: rgba(255,255,255,0.06);
+      color: var(--card-color, var(--accent));
+      border: 1px solid var(--card-color, var(--accent));
+      margin-bottom: 20px;
+    }
+
+    .card-icon-wrap {
+      width: 60px; height: 60px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px;
+      margin-bottom: 20px;
+      transition: transform 0.3s, box-shadow 0.3s;
+    }
+    .card:hover .card-icon-wrap, .card.pointer-hover .card-icon-wrap {
+      transform: scale(1.1) rotate(-4deg);
+    }
+
+    .card h2 { font-size: 1.15rem; font-weight: 600; margin-bottom: 8px; }
+    .card p { font-size: 0.875rem; color: var(--muted); line-height: 1.6; }
+
+    .card-footer {
+      margin-top: 24px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .card-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip {
+      font-size: 0.68rem; padding: 3px 8px; border-radius: 100px;
+      background: rgba(255,255,255,0.05);
+      color: var(--muted);
+      border: 1px solid rgba(255,255,255,0.07);
+    }
+    .card-arrow {
+      width: 32px; height: 32px; border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.1);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 0.8rem;
+      transition: all 0.3s; flex-shrink: 0;
+    }
+    .card:hover .card-arrow, .card.pointer-hover .card-arrow {
+      background: var(--card-color, var(--accent));
+      border-color: var(--card-color, var(--accent));
+      color: white; transform: rotate(45deg);
+    }
+
+    .card.soon { cursor: default; }
+    .card.soon:hover, .card.soon.pointer-hover { transform: none; box-shadow: none; border-color: var(--border); }
+    .card.soon:hover .card-glow-bar, .card.soon.pointer-hover .card-glow-bar { opacity: 0; }
+    .soon-badge {
+      position: absolute; top: 16px; right: 16px;
+      font-size: 0.65rem; font-weight: 600; letter-spacing: 0.1em;
+      text-transform: uppercase; padding: 4px 10px; border-radius: 100px;
+      background: rgba(107,122,153,0.15); color: var(--muted);
+      border: 1px solid var(--border);
+    }
+
+    #coord-hud {
+      position: fixed; bottom: calc(var(--marker-margin-y, 60px) + var(--marker-size, 180px) + 20px); right: var(--marker-margin-x, 24px); z-index: 100;
+      background: rgba(13,20,36,0.85);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 12px; padding: 12px 18px;
+      font-size: 0.78rem; color: var(--muted);
+      display: none; line-height: 1.8;
+    }
+    #coord-hud.active { display: block; }
+    #coord-hud span { color: var(--accent); font-weight: 600; }
+    #coord-hud .imu-row { color: var(--accent2); }
+
+    #pointer {
+      position: fixed;
+      left: 0; top: 0;
+      width: 18px; height: 18px;
+      margin-left: -9px; margin-top: -9px;
+      border: 2px solid rgba(147, 197, 253, 0.95);
+      border-radius: 50%;
+      background: rgba(59, 130, 246, 0.18);
+      box-shadow: 0 0 22px rgba(59,130,246,0.35);
+      pointer-events: none; z-index: 1500;
+      opacity: 0; transform: translate3d(0,0,0);
+      transition: opacity 0.15s ease, transform 0.05s linear, background 0.15s ease;
+    }
+    #pointer::before, #pointer::after {
+      content: ''; position: absolute; left: 50%; top: 50%;
+      background: rgba(191, 219, 254, 0.85);
+      transform: translate(-50%, -50%);
+    }
+    #pointer::before { width: 2px; height: 28px; }
+    #pointer::after { width: 28px; height: 2px; }
+    #pointer.active { opacity: 1; }
+    #pointer.down { background: rgba(59,130,246,0.38); transform: scale(0.9); }
+
+    footer {
+      position: relative; z-index: 1;
+      text-align: center; padding: 20px 20px 80px;
+      color: var(--muted); font-size: 0.78rem;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── ArUco Vision Corner Markers (for RPi Camera Detection) ── */
+    :root {
+      --marker-size: clamp(80px, 13vw, 150px);
+      --marker-margin-x: clamp(16px, 3.125vw, 60px);
+      --marker-margin-y: clamp(16px, 5.556vh, 60px);
+      --marker-pad: 10px;
+    }
+
+    body.calibrated-mode {
+      --marker-size: 5.625vw;
+      --marker-margin-x: 3.125vw;
+      --marker-margin-y: 5.556vh;
+    }
+
+    .aruco-markers-wrap {
+      position: fixed; inset: 0;
+      pointer-events: none;
+      z-index: 900;
+    }
+
+    .aruco-card {
+      position: fixed;
+      background: #ffffff;
+      padding: var(--marker-pad);
+      border-radius: 4px;
+      box-shadow: 0 10px 35px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.25);
+      pointer-events: auto;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+
+    .aruco-tl { top: var(--marker-margin-y); left: var(--marker-margin-x); }
+    .aruco-tr { top: var(--marker-margin-y); right: var(--marker-margin-x); }
+    .aruco-br { bottom: var(--marker-margin-y); right: var(--marker-margin-x); }
+    .aruco-bl { bottom: var(--marker-margin-y); left: var(--marker-margin-x); }
+
+    .aruco-img {
+      width: var(--marker-size);
+      height: var(--marker-size);
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: crisp-edges;
+      background: #ffffff;
+    }
+
+    .aruco-tag {
+      position: absolute;
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: #94a3b8;
+      background: rgba(13, 20, 36, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      padding: 2px 7px;
+      border-radius: 100px;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .aruco-tl .aruco-tag { top: calc(100% + 5px); left: 0; }
+    .aruco-tr .aruco-tag { top: calc(100% + 5px); right: 0; }
+    .aruco-br .aruco-tag { bottom: calc(100% + 5px); right: 0; }
+    .aruco-bl .aruco-tag { bottom: calc(100% + 5px); left: 0; }
+
+    .aruco-hidden .aruco-card {
+      opacity: 0;
+      pointer-events: none;
+      transform: scale(0.92);
+    }
+
+    /* ── Marker Control Floating Toolbar ── */
+    #marker-toolbar {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      pointer-events: auto;
+    }
+
+    .marker-toolbar-pill {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(13, 20, 36, 0.88);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 100px;
+      padding: 6px 14px 6px 16px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      font-size: 0.78rem;
+    }
+
+    .marker-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #22c55e;
+      box-shadow: 0 0 10px rgba(34, 197, 94, 0.8);
+      animation: blink 2s infinite;
+    }
+
+    .marker-tb-title {
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0.02em;
+      margin-right: 4px;
+    }
+
+    .tb-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--muted);
+      font-family: inherit;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 5px 12px;
+      border-radius: 100px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .tb-btn:hover, .tb-btn.pointer-hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: var(--text);
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+    .tb-btn.active {
+      background: rgba(59, 130, 246, 0.25);
+      border-color: var(--accent);
+      color: #93c5fd;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="logo-ring">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+        <path d="m4.93 4.93 2.12 2.12M16.95 16.95l2.12 2.12M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12"/>
+      </svg>
+    </div>
+    <div class="header-text">
+      <h1>Pi-Pointer Demo Hub</h1>
+      <p>RPi 4 · MPU6050 IMU · ArUco Vision Fusion · WebSocket Bridge</p>
+    </div>
+    <div id="status-badge">
+      <div id="status-dot"></div>
+      <span id="status-text">Bridge offline</span>
+    </div>
+  </div>
+</header>
+
+<main class="grid-section">
+
+  <a class="card soon" href="lecture.html" style="--card-color:#a78bfa;" id="card-lecture">
+    <div class="card-glow-bar"></div>
+    <span class="soon-badge">Coming Soon</span>
+    <div class="card-badge">📽 Demo 1</div>
+    <div class="card-icon-wrap">🎯</div>
+    <h2>Smart Lecture Remote</h2>
+    <p>Virtual laser spotlight, live mid-air annotations, and swipe gestures to advance slides — a premium Spotlight replacement.</p>
+    <div class="card-footer">
+      <div class="card-chips">
+        <span class="chip">Laser Dot</span><span class="chip">Annotations</span><span class="chip">Gestures</span>
+      </div>
+      <div class="card-arrow">→</div>
+    </div>
+  </a>
+
+  <a class="card" href="shooter.html" style="--card-color:#f43f5e;" id="card-shooter">
+    <div class="card-glow-bar"></div>
+    <div class="card-badge">🔴 Live · Demo 2</div>
+    <div class="card-icon-wrap">🎮</div>
+    <h2>Air-Aim Target Shooter</h2>
+    <p>Floating targets at random positions. Point and hover 300 ms to shoot. Real-time accuracy %, score, and reaction timer prove sub-60 ms latency.</p>
+    <div class="card-footer">
+      <div class="card-chips">
+        <span class="chip">Particles</span><span class="chip">Latency Test</span><span class="chip">Leaderboard</span>
+      </div>
+      <div class="card-arrow">→</div>
+    </div>
+  </a>
+
+  <a class="card soon" href="calligraphy.html" style="--card-color:#f59e0b;" id="card-calligraphy">
+    <div class="card-glow-bar"></div>
+    <span class="soon-badge">Coming Soon</span>
+    <div class="card-badge">✏ Demo 3</div>
+    <div class="card-icon-wrap">🖌️</div>
+    <h2>Air-Calligraphy & 3D CAD</h2>
+    <p>Draw in mid-air on a 2D canvas. Wrist roll changes brush thickness. Switch to 3D mode and rotate a model with full 6-DoF control.</p>
+    <div class="card-footer">
+      <div class="card-chips">
+        <span class="chip">6-DoF</span><span class="chip">Three.js</span><span class="chip">IMU Roll</span>
+      </div>
+      <div class="card-arrow">→</div>
+    </div>
+  </a>
+
+  <a class="card soon" href="#" style="--card-color:#22c55e;" id="card-aac">
+    <div class="card-glow-bar"></div>
+    <span class="soon-badge">Coming Soon</span>
+    <div class="card-badge">♿ Demo 4</div>
+    <div class="card-icon-wrap">🗣️</div>
+    <h2>Assistive Tech AAC Board</h2>
+    <p>High-contrast communication tiles with dwell-time selection (0.6 s hover → progress ring → text-to-speech). Designed for restricted motor control.</p>
+    <div class="card-footer">
+      <div class="card-chips">
+        <span class="chip">Dwell Select</span><span class="chip">TTS</span><span class="chip">HCI</span>
+      </div>
+      <div class="card-arrow">→</div>
+    </div>
+  </a>
+
+  <a class="card soon" href="synth.html" style="--card-color:#06b6d4;" id="card-synth">
+    <div class="card-glow-bar"></div>
+    <span class="soon-badge">Coming Soon</span>
+    <div class="card-badge">🎵 Demo 5</div>
+    <div class="card-icon-wrap">🎹</div>
+    <h2>Spatial Air Synth</h2>
+    <p>X-axis controls pitch, Y-axis controls volume, wrist tilt modulates reverb and filter cutoff. Real-time oscilloscope visualisation.</p>
+    <div class="card-footer">
+      <div class="card-chips">
+        <span class="chip">Web Audio</span><span class="chip">Theremin</span><span class="chip">VFX</span>
+      </div>
+      <div class="card-arrow">→</div>
+    </div>
+  </a>
+
+  <a class="card soon" href="#" style="--card-color:#f97316;" id="card-drone">
+    <div class="card-glow-bar"></div>
+    <span class="soon-badge">Coming Soon</span>
+    <div class="card-badge">🚁 Demo 6</div>
+    <div class="card-icon-wrap">🛸</div>
+    <h2>Virtual Drone Cockpit</h2>
+    <p>Point at a satellite map to place GPS waypoints. Tilt forward/back/left/right to control virtual drone pitch and roll in a simulated HUD.</p>
+    <div class="card-footer">
+      <div class="card-chips">
+        <span class="chip">Three.js</span><span class="chip">Telemetry</span><span class="chip">HUD</span>
+      </div>
+      <div class="card-arrow">→</div>
+    </div>
+  </a>
+
+</main>
+
+<!-- ── ArUco Vision Corner Markers (for RPi Camera Detection) ── -->
+<div id="corner-markers" class="aruco-markers-wrap" aria-label="ArUco Vision Calibration Markers">
+  <div class="aruco-card aruco-tl" title="Marker 0: Top-Left">
+    <div class="aruco-tag">TL · #0</div>
+    <img src="assets/marker_0.png" alt="ArUco Marker 0" class="aruco-img" />
+  </div>
+  <div class="aruco-card aruco-tr" title="Marker 1: Top-Right">
+    <div class="aruco-tag">TR · #1</div>
+    <img src="assets/marker_1.png" alt="ArUco Marker 1" class="aruco-img" />
+  </div>
+  <div class="aruco-card aruco-br" title="Marker 2: Bottom-Right">
+    <div class="aruco-tag">BR · #2</div>
+    <img src="assets/marker_2.png" alt="ArUco Marker 2" class="aruco-img" />
+  </div>
+  <div class="aruco-card aruco-bl" title="Marker 3: Bottom-Left">
+    <div class="aruco-tag">BL · #3</div>
+    <img src="assets/marker_3.png" alt="ArUco Marker 3" class="aruco-img" />
+  </div>
+</div>
+
+<!-- ── Floating Marker Control Toolbar ── -->
+<div id="marker-toolbar">
+  <div class="marker-toolbar-pill">
+    <div class="marker-status-dot"></div>
+    <span class="marker-tb-title">ArUco Vision</span>
+    <button id="btn-toggle-markers" class="tb-btn active" title="Toggle corner markers (Shortcut: M)">Markers: ON</button>
+    <button id="btn-calib-markers" class="tb-btn" title="Toggle 1:1 calibrated 1920x1080 scale (Shortcut: C)">1:1 Scale</button>
+    <button id="btn-fullscreen" class="tb-btn" title="Toggle fullscreen for exact screen geometry (Shortcut: F)">⛶ Fullscreen</button>
+  </div>
+</div>
+
+<div id="coord-hud">
+  Pointer &nbsp;x: <span id="hud-x">–</span> &nbsp;y: <span id="hud-y">–</span><br>
+  <span class="imu-row">Yaw: <span id="hud-yaw">–</span>° &nbsp;Pitch: <span id="hud-pitch">–</span>° &nbsp;Roll: <span id="hud-roll">–</span>°</span>
+</div>
+
+<div id="pointer" aria-hidden="true"></div>
+
+<footer>Pi-Pointer · RPi 4 + MPU6050 + ArUco · WebSocket bridge on ws://localhost:8765</footer>
+
+<script>
+document.querySelectorAll('.card').forEach(card => {
+  card.addEventListener('mousemove', e => {
+    const r = card.getBoundingClientRect();
+    card.style.setProperty('--mx', ((e.clientX - r.left) / r.width * 100).toFixed(1) + '%');
+    card.style.setProperty('--my', ((e.clientY - r.top) / r.height * 100).toFixed(1) + '%');
+  });
+});
+
+const badge = document.getElementById('status-badge');
+const statusTx = document.getElementById('status-text');
+const hud = document.getElementById('coord-hud');
+const hudX = document.getElementById('hud-x');
+const hudY = document.getElementById('hud-y');
+const hudYaw   = document.getElementById('hud-yaw');
+const hudPitch = document.getElementById('hud-pitch');
+const hudRoll  = document.getElementById('hud-roll');
+const pointer = document.getElementById('pointer');
+const pointerState = { x: innerWidth / 2, y: innerHeight / 2, targetX: innerWidth / 2, targetY: innerHeight / 2, fromPi: false, down: false, bridgeButtonDown: false, bridgePressTarget: null };
+let hoverTarget = null;
+let lastHoverX = null, lastHoverY = null;
+
+function r2deg(v) { return (v * 180 / Math.PI).toFixed(1); }
+
+function dispatchPointerEvent(element, type, relatedTarget) {
+  const options = {
+    bubbles: true,
+    cancelable: true,
+    clientX: pointerState.x,
+    clientY: pointerState.y,
+    relatedTarget
+  };
+  const mouseType = {
+    over: 'mouseover',
+    out: 'mouseout',
+    move: 'mousemove',
+    down: 'mousedown',
+    up: 'mouseup'
+  }[type];
+  element.dispatchEvent(new PointerEvent(`pointer${type}`, {
+    ...options,
+    pointerId: 1,
+    pointerType: 'mouse',
+    isPrimary: true,
+    button: 0,
+    buttons: pointerState.down ? 1 : 0
+  }));
+  element.dispatchEvent(new MouseEvent(mouseType, {
+    ...options,
+    button: 0,
+    buttons: pointerState.down ? 1 : 0
+  }));
+}
+
+function updatePointerInteraction() {
+  if (!pointerState.fromPi) {
+    if (hoverTarget) {
+      const oldStyleTarget = hoverTarget.closest('.card, .tb-btn');
+      if (oldStyleTarget) oldStyleTarget.classList.remove('pointer-hover');
+      dispatchPointerEvent(hoverTarget, 'out', null);
+      hoverTarget = null;
+    }
+    lastHoverX = lastHoverY = null;
+    return;
+  }
+
+  const target = document.elementFromPoint(pointerState.x, pointerState.y);
+  const targetChanged = target !== hoverTarget;
+  if (targetChanged) {
+    const oldTarget = hoverTarget;
+    const oldStyleTarget = oldTarget && oldTarget.closest('.card, .tb-btn');
+    const newStyleTarget = target && target.closest('.card, .tb-btn');
+    if (oldStyleTarget && oldStyleTarget !== newStyleTarget) {
+      oldStyleTarget.classList.remove('pointer-hover');
+    }
+    if (newStyleTarget) newStyleTarget.classList.add('pointer-hover');
+    if (oldTarget) dispatchPointerEvent(oldTarget, 'out', target);
+    if (target) dispatchPointerEvent(target, 'over', oldTarget);
+    hoverTarget = target;
+  }
+
+  if (target && (targetChanged || pointerState.x !== lastHoverX || pointerState.y !== lastHoverY)) {
+    dispatchPointerEvent(target, 'move', null);
+    lastHoverX = pointerState.x;
+    lastHoverY = pointerState.y;
+  }
+}
+
+function clickableAtPointer() {
+  const target = document.elementFromPoint(pointerState.targetX, pointerState.targetY);
+  return target && target.closest('a, button, [role="button"], input, select, textarea, summary');
+}
+
+function updatePointerVisual() {
+  pointerState.x += (pointerState.targetX - pointerState.x) * 0.28;
+  pointerState.y += (pointerState.targetY - pointerState.y) * 0.28;
+  pointer.style.transform = `translate(${pointerState.x}px, ${pointerState.y}px)`;
+  pointer.classList.toggle('active', pointerState.fromPi);
+  pointer.classList.toggle('down', pointerState.down);
+  updatePointerInteraction();
+}
+
+function handleMsg(data) {
+  if (data.type === 'cursor') {
+    if (!Number.isFinite(data.x) || !Number.isFinite(data.y)) return;
+    pointerState.fromPi = true;
+    pointerState.targetX = Math.max(0, Math.min(1, data.x)) * window.innerWidth;
+    pointerState.targetY = Math.max(0, Math.min(1, data.y)) * window.innerHeight;
+    hudX.textContent = data.x.toFixed(3);
+    hudY.textContent = data.y.toFixed(3);
+  } else if (data.type === 'imu') {
+    const r = data.r;  // flat [r00..r22]
+    // yaw = atan2(r[0][2], r[2][2]), pitch = asin(-r[1][2]), roll = asin(r[1][0])
+    const yaw   = Math.atan2(r[2], r[8]);
+    const pitch = Math.asin(Math.max(-1, Math.min(1, -r[5])));
+    const roll  = Math.asin(Math.max(-1, Math.min(1,  r[3])));
+    hudYaw.textContent   = r2deg(yaw);
+    hudPitch.textContent = r2deg(pitch);
+    hudRoll.textContent  = r2deg(roll);
+  } else if (data.type === 'button') {
+    const down = !!data.down;
+    if (down && !pointerState.bridgeButtonDown) {
+      pointerState.down = true;
+      const target = document.elementFromPoint(pointerState.targetX, pointerState.targetY);
+      pointerState.bridgePressTarget = clickableAtPointer();
+      if (target) dispatchPointerEvent(target, 'down', null);
+    } else if (!down && pointerState.bridgeButtonDown) {
+      pointerState.down = false;
+      const target = document.elementFromPoint(pointerState.targetX, pointerState.targetY);
+      if (target) dispatchPointerEvent(target, 'up', null);
+      const releaseTarget = clickableAtPointer();
+      if (releaseTarget && releaseTarget === pointerState.bridgePressTarget && !releaseTarget.matches(':disabled')) {
+        releaseTarget.click();
+      }
+      pointerState.bridgePressTarget = null;
+    }
+    pointerState.bridgeButtonDown = down;
+    hud.classList.toggle('button-down', down);
+    statusTx.textContent = down ? 'Button held' : 'Bridge connected';
+  }
+  updatePointerVisual();
+}
+
+window.addEventListener('pointermove', e => {
+  if (!pointerState.fromPi) {
+    pointerState.targetX = e.clientX;
+    pointerState.targetY = e.clientY;
+    updatePointerVisual();
+  }
+});
+
+window.addEventListener('pointerdown', () => { pointerState.down = true; pointer.classList.add('down'); });
+window.addEventListener('pointerup', () => { pointerState.down = false; pointer.classList.remove('down'); });
+
+requestAnimationFrame(function tick() {
+  updatePointerVisual();
+  requestAnimationFrame(tick);
+});
+
+let reconnTimer = null, reconnDelay = 2000;
+let currentWs = null;
+
+function connect() {
+  if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
+  if (currentWs) {
+    currentWs.onopen = currentWs.onclose = currentWs.onerror = currentWs.onmessage = null;
+    try { currentWs.close(); } catch {}
+  }
+  const ws = new WebSocket('ws://localhost:8765');
+  currentWs = ws;
+  ws.onopen = () => {
+    reconnDelay = 2000;  // reset on success
+    badge.classList.add('connected');
+    statusTx.textContent = 'Bridge connected';
+    hud.classList.add('active');
+  };
+  ws.onmessage = e => { try { handleMsg(JSON.parse(e.data)); } catch {} };
+  ws.onerror = () => {};
+  ws.onclose = () => {
+    badge.classList.remove('connected');
+    statusTx.textContent = 'Bridge offline';
+    hud.classList.remove('active');
+    pointerState.fromPi = false;
+    pointerState.down = false;
+    pointerState.bridgeButtonDown = false;
+    pointerState.bridgePressTarget = null;
+    pointer.classList.remove('down');
+    updatePointerInteraction();
+    if (!reconnTimer) {
+      const jitter = Math.random() * 1000;
+      reconnTimer = setTimeout(() => {
+        reconnTimer = null;
+        connect();
+      }, reconnDelay + jitter);
+      reconnDelay = Math.min(reconnDelay * 1.5, 30000);
+    }
+  };
+}
+connect();
+
+/* ── Corner Markers Interactive Toolbar & Shortcuts ── */
+const markersWrap = document.getElementById('corner-markers');
+const btnToggle = document.getElementById('btn-toggle-markers');
+const btnCalib  = document.getElementById('btn-calib-markers');
+const btnFull   = document.getElementById('btn-fullscreen');
+
+let markersVisible = true;
+let isCalibrated = false;
+
+function toggleMarkers(forceState) {
+  markersVisible = forceState !== undefined ? forceState : !markersVisible;
+  markersWrap.classList.toggle('aruco-hidden', !markersVisible);
+  btnToggle.classList.toggle('active', markersVisible);
+  btnToggle.textContent = markersVisible ? 'Markers: ON' : 'Markers: OFF';
+}
+
+function toggleCalib() {
+  isCalibrated = !isCalibrated;
+  document.body.classList.toggle('calibrated-mode', isCalibrated);
+  btnCalib.classList.toggle('active', isCalibrated);
+  btnCalib.textContent = isCalibrated ? '1:1 Calib ON' : '1:1 Scale';
+}
+
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+
+btnToggle.addEventListener('click', () => toggleMarkers());
+btnCalib.addEventListener('click', toggleCalib);
+btnFull.addEventListener('click', toggleFullscreen);
+
+document.addEventListener('fullscreenchange', () => {
+  btnFull.classList.toggle('active', !!document.fullscreenElement);
+});
+
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'm' || e.key === 'M') toggleMarkers();
+  if (e.key === 'c' || e.key === 'C') toggleCalib();
+  if (e.key === 'f' || e.key === 'F') toggleFullscreen();
+});
+</script>
+</body>
+</html>
